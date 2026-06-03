@@ -1,0 +1,21 @@
+{
+  "name": "grok-mcp-remote",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js",
+    "test": "node test/grokXSearch.test.mjs"
+  },
+  "dependencies": {
+    "@google/genai": "^2.7.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^5.2.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.1",
+    "typescript": "^6.0.3"
+  }
+}

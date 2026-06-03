@@ -1,0 +1,7 @@
+{
+  "fed": ["KXFED"],
+  "rate": ["KXFED"],
+  "interest": ["KXFED"],
+  "bitcoin": ["KXBTC"],
+  "btc": ["KXBTC"]
+}

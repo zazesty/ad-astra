@@ -1,0 +1,12 @@
+# dependencies & build output (reproducible from src/)
+node_modules/
+build/
+
+# secrets — NEVER commit (real key lives in /etc/grok-mcp.env, outside the repo)
+.env
+*.env
+
+# local backups (kept on-box, not in history)
+backups/
+*.bak
+*.bak-*
