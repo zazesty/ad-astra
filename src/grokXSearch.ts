@@ -36,16 +36,15 @@ export function registerGrokXSearch(
     {
       title: "Grok X Search",
       description:
-        "Answer a question using a LIVE search of X (Twitter), via Grok. Returns a " +
-        "synthesized answer plus citations to the source posts. Use for current " +
-        "sentiment, trending discussion, or what specific accounts are saying right " +
-        "now. For plain Grok with no live data, use ask_grok instead.",
+        "Answer a question using a LIVE search of X (Twitter) via Grok. Best for " +
+        "public sentiment, breaking discussion, and what people are saying right " +
+        "now on a topic. Returns Grok's synthesized answer over matching posts.",
       inputSchema: {
         query: z
           .string()
           .trim()
           .min(1, "query must not be empty")
-          .describe("The question to answer using live X data."),
+          .describe("Natural-language question about X discussion/sentiment, e.g. 'what are people saying about X vs Y'."),
         allowed_handles: z
           .array(z.string())
           .max(20)
@@ -60,7 +59,7 @@ export function registerGrokXSearch(
           .string()
           .regex(/^\d{4}-\d{2}-\d{2}$/, "from_date must be ISO YYYY-MM-DD")
           .optional()
-          .describe("Earliest post date, ISO YYYY-MM-DD."),
+          .describe("Earliest post date to include, format YYYY-MM-DD. Omit for no lower bound. For an upper bound, set to_date."),
         to_date: z
           .string()
           .regex(/^\d{4}-\d{2}-\d{2}$/, "to_date must be ISO YYYY-MM-DD")

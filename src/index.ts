@@ -62,16 +62,16 @@ function buildServer() {
     {
       title: "Get Odds",
       description:
-        "Current prediction-market odds for a topic. Full-text searches liquid markets and returns implied probability, volume (USD-normalized across venues), and a link. sources defaults to ['polymarket','kalshi'].",
+        "Current prediction-market odds for a topic. Full-text searches liquid markets and returns, per market: implied probability, outcome label, USD-normalized volume, liquidity, a resolution URL, and close_date. NOTE: close_date is the event/expiry date associated with the market, NOT the live trading cutoff — markets typically remain tradeable until resolution, so do not infer \"trading closed\" from a past close_date. Results sorted by salience. sources defaults to ['polymarket','kalshi'].",
       inputSchema: {
         query: z
           .string()
           .refine((s) => s.trim().length > 0, {
             message: "query must not be empty or whitespace-only",
           })
-          .describe("Topic to look up, e.g. 'fed rate cut'"),
-        limit: z.number().optional().describe("Max markets (default 5)."),
-        sources: z.array(z.string()).optional().describe("Venues; default ['polymarket','kalshi']."),
+          .describe("Topic to search, e.g. 'fed rate cut', 'california governor primary'. Broader terms return more markets."),
+        limit: z.number().optional().describe("Max markets to return (default 5)."),
+        sources: z.array(z.string()).optional().describe("Venues to query; default ['polymarket','kalshi']."),
       },
     },
     async ({ query, limit, sources }) => {

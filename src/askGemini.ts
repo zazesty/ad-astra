@@ -45,21 +45,22 @@ export function registerAskGemini(
     {
       title: "Ask Gemini 3.1 Pro",
       description:
-        "Send a prompt to Google's Gemini 3.1 Pro (top-tier reasoning, extended " +
-        "thinking on) and return its response. Use for a strong second-model " +
-        "opinion on hard/contested calls, or (with grounding) for answers backed " +
-        "by live Google Search. Not for high-volume use.",
+        "Send a prompt to Google's Gemini 3.1 Pro for top-tier reasoning and " +
+        "extended-thinking tasks. Set grounded=true to enable LIVE Google web " +
+        "search — use this for any question about current events, real-time data, " +
+        "or facts past the model's training cutoff. Returns Gemini's text response " +
+        "(with inline source citations when grounded).",
       inputSchema: {
         prompt: z
           .string()
           .refine((s) => s.trim().length > 0, {
             message: "prompt must not be empty or whitespace-only",
           })
-          .describe("The prompt to send to Gemini."),
+          .describe("The full prompt/question. For grounded queries, state the current date/time and ask explicitly for sources and timestamps."),
         grounded: z
           .boolean()
           .optional()
-          .describe("If true, enable Google Search grounding for live retrieval."),
+          .describe("true = answer backed by live web search (current events, real-time data). false = model-knowledge only, faster. Default false."),
         model: z
           .string()
           .optional()
