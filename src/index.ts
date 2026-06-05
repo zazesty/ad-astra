@@ -10,6 +10,7 @@ const XAI_API_KEY = process.env.XAI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const XAI_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_MODEL = "grok-4.3";
+const DEFAULT_REASONING_EFFORT = "high";
 const PORT = Number(process.env.PORT ?? 3000);
 
 function buildServer() {
@@ -30,9 +31,13 @@ function buildServer() {
           .describe("The question or prompt to send to Grok."),
         system: z.string().optional().describe("Optional system instruction."),
         model: z.string().optional().describe(`Optional model slug. Default ${DEFAULT_MODEL}.`),
+        reasoning_effort: z
+          .enum(["none", "low", "medium", "high"])
+          .optional()
+          .describe(`How hard Grok thinks before answering. Default ${DEFAULT_REASONING_EFFORT}. Drop to low/none for quick, cheap lookups.`),
       },
     },
-    async ({ prompt, system, model }) => {
+    async ({ prompt, system, model, reasoning_effort }) => {
       if (!XAI_API_KEY) {
         return { content: [{ type: "text", text: "Error: XAI_API_KEY not set." }], isError: true };
       }
@@ -43,7 +48,11 @@ function buildServer() {
         const res = await fetch(`${XAI_BASE_URL}/chat/completions`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${XAI_API_KEY}` },
-          body: JSON.stringify({ model: model ?? DEFAULT_MODEL, messages }),
+          body: JSON.stringify({
+            model: model ?? DEFAULT_MODEL,
+            reasoning_effort: reasoning_effort ?? DEFAULT_REASONING_EFFORT,
+            messages,
+          }),
         });
         if (!res.ok) {
           return { content: [{ type: "text", text: `xAI API error ${res.status}: ${await res.text()}` }], isError: true };
