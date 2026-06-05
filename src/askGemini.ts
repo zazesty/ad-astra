@@ -35,7 +35,7 @@ const MAX_PROMPT_CHARS = 32_000;
 
 export function registerAskGemini(
   server: any,
-  { apiKey, model = "gemini-3.1-pro-preview" }: RegisterOpts
+  { apiKey, model = "gemini-pro-latest" }: RegisterOpts
 ) {
   // Client is cheap (just holds the key); fine to construct per buildServer().
   const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
