@@ -93,9 +93,12 @@ function buildServer() {
 const app = express();
 app.use(express.json());
 
-// Both paths share ONE handler (second mountpoint, not a fork): /mcp/PATH is an
-// alias that runs the identical buildServer() registration as /mcp.
-const MCP_PATHS = ["/mcp", "/mcp/PATH"];
+// SINGLE versioned path only. The bare /mcp path was retired 2026-06-05 because
+// it had been REDACTED (REDACTED) — and the path is the REDACTED in front of
+// REDACTED API keys, so a REDACTED public path is a liability.
+// Bump the version whenever tools change, so Grok's per-URL tool-list cache is
+// forced to re-fetch (history: v2 → v4 → v5; /mcp dropped at v5).
+const MCP_PATHS = ["/mcp/PATH"];
 
 // Stateless: a fresh server + transport per request. Simple and fine for a single-tool personal server.
 app.post(MCP_PATHS, async (req, res) => {
@@ -110,4 +113,4 @@ app.post(MCP_PATHS, async (req, res) => {
 app.get(MCP_PATHS, (_req, res) => res.status(405).send("Method Not Allowed"));
 app.delete(MCP_PATHS, (_req, res) => res.status(405).send("Method Not Allowed"));
 
-app.listen(PORT, "127.0.0.1", () => console.log(`grok-mcp listening on 127.0.0.1:${PORT}/mcp`));
+app.listen(PORT, "127.0.0.1", () => console.log(`grok-mcp listening on 127.0.0.1:${PORT}/mcp/PATH`));
