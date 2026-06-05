@@ -28,9 +28,8 @@ type RegisterOpts = {
   model?: string;
 };
 
-// Cheap sanity guard for an REDACTED endpoint: block an absurd single payload.
-// The real backstop against a REDACTED is the provider-side spend cap; this
-// just stops one pathological prompt from running up input tokens.
+// Cheap sanity guard: block an absurd single payload so one pathological
+// prompt can't run up input tokens.
 const MAX_PROMPT_CHARS = 32_000;
 
 export function registerAskGemini(
