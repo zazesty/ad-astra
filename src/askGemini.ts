@@ -42,7 +42,7 @@ export function registerAskGemini(
   server.registerTool(
     "ask_gemini",
     {
-      title: "Ask Gemini 3.1 Pro",
+      title: "Ask Gemini",
       description:
         "Send a prompt to Google's Gemini 3.1 Pro for top-tier reasoning and " +
         "extended-thinking tasks. For ANY factual or current question, default " +
