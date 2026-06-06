@@ -64,9 +64,13 @@ export function registerAskGemini(
           .string()
           .optional()
           .describe(`Optional model slug. Default ${model}.`),
+        reasoning_effort: z
+          .enum(["low", "medium", "high"])
+          .optional()
+          .describe("How hard Gemini Pro thinks before answering. Default high. Drop to low/medium for quick lookups. (Only applies to -pro thinking models.)"),
       },
     },
-    async ({ prompt, grounded, model: modelOverride }: any) => {
+    async ({ prompt, grounded, model: modelOverride, reasoning_effort }: any) => {
       if (!ai) {
         return {
           content: [{ type: "text", text: "Error: GEMINI_API_KEY not set." }],
@@ -91,11 +95,13 @@ export function registerAskGemini(
         // actual model being sent (override OR default) and gate the config on it.
         const resolvedModel = modelOverride ?? model;
         const isThinkingModel = /-pro/i.test(resolvedModel);
+        const thinkingLevel =
+          ThinkingLevel[(reasoning_effort ?? "high").toUpperCase() as keyof typeof ThinkingLevel];
         const resp = await ai.models.generateContent({
           model: resolvedModel,
           contents: prompt,
           config: {
-            ...(isThinkingModel ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
+            ...(isThinkingModel ? { thinkingConfig: { thinkingLevel } } : {}),
             ...(grounded ? { tools: [{ googleSearch: {} }] } : {}),
           },
         });
