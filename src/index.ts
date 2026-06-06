@@ -32,9 +32,9 @@ function buildServer() {
         system: z.string().optional().describe("Optional system instruction."),
         model: z.string().optional().describe(`Optional model slug. Default ${DEFAULT_MODEL}.`),
         reasoning_effort: z
-          .enum(["none", "low", "medium", "high"])
+          .enum(["low", "medium", "high"])
           .optional()
-          .describe(`How hard Grok thinks before answering. Default ${DEFAULT_REASONING_EFFORT}. Bump to high for hard reasoning/math/debugging; drop to low/none for quick, cheap lookups.`),
+          .describe(`How hard Grok thinks before answering. Default ${DEFAULT_REASONING_EFFORT}. Bump to high for hard reasoning/math/debugging; drop to low for quick, cheap lookups.`),
       },
     },
     async ({ prompt, system, model, reasoning_effort }) => {
