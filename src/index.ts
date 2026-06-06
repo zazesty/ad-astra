@@ -58,6 +58,9 @@ function buildServer() {
           return { content: [{ type: "text", text: `xAI API error ${res.status}: ${await res.text()}` }], isError: true };
         }
         const data = await res.json();
+        // Observability: ground-truth which model actually served the response
+        // (xAI silently routes legacy aliases). Goes to journald, not the reply.
+        console.error(`[ask_grok] model: requested=${model ?? DEFAULT_MODEL} resolved=${data?.model ?? "?"}`);
         const reply = data?.choices?.[0]?.message?.content ?? "(no content returned)";
         return { content: [{ type: "text", text: reply }] };
       } catch (err) {

@@ -112,6 +112,10 @@ export function registerAskGemini(
           },
         });
 
+        // Observability: log the model that actually served this. Acute reason —
+        // `gemini-pro-latest` will silently flip (e.g. to 3.5 Pro) at a higher
+        // price point; this is the ground truth to catch it. Goes to journald.
+        console.error(`[ask_gemini] model: requested=${resolvedModel} resolved=${resp.modelVersion ?? "?"}`);
         const text = resp.text ?? "(no text returned)";
         return { content: [{ type: "text", text }] };
       } catch (err) {
