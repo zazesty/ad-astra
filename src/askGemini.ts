@@ -44,7 +44,7 @@ export function registerAskGemini(
     {
       title: "Ask Gemini",
       description:
-        "Send a prompt to Google's Gemini 3.1 Pro for top-tier reasoning and " +
+        "Send a prompt to Google's latest Gemini Pro model for top-tier reasoning and " +
         "extended-thinking tasks. For ANY factual or current question, default " +
         "grounded=true to enable LIVE Google web search (current events, real-time " +
         "data, or facts past the model's training cutoff); use grounded=false only " +
