@@ -10,7 +10,7 @@ const XAI_API_KEY = process.env.XAI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const XAI_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_MODEL = "grok-4.3";
-const DEFAULT_REASONING_EFFORT = "high";
+const DEFAULT_REASONING_EFFORT = "medium";
 const PORT = Number(process.env.PORT ?? 3000);
 
 function buildServer() {
@@ -34,7 +34,7 @@ function buildServer() {
         reasoning_effort: z
           .enum(["none", "low", "medium", "high"])
           .optional()
-          .describe(`How hard Grok thinks before answering. Default ${DEFAULT_REASONING_EFFORT}. Drop to low/none for quick, cheap lookups.`),
+          .describe(`How hard Grok thinks before answering. Default ${DEFAULT_REASONING_EFFORT}. Bump to high for hard reasoning/math/debugging; drop to low/none for quick, cheap lookups.`),
       },
     },
     async ({ prompt, system, model, reasoning_effort }) => {
