@@ -66,9 +66,19 @@ export function applyLens(
   return { system: system ? `${lens.body}\n\n${system}` : lens.body };
 }
 
-export const LENS_PARAM_DESCRIPTION =
-  "Analytical frame applied via the system prompt. OMIT to use the 'default' " +
-  "second-opinion frame (auto-applied when you pass no system text); pass a lens " +
-  "name for a specific frame (read the `lenses://frames` resource for the menu, " +
-  "e.g. 'pre-mortem', 'steelman-then-break'); pass 'none' to disable framing. " +
-  "Composes with `system`: lens first, then your system text.";
+// Built from lenses.md at tool-registration time so the menu is visible IN THE
+// SCHEMA (clients that don't surface the lenses://frames resource — e.g. the
+// Grok chatbot — still see the options). Single source of truth = lenses.md;
+// adding/renaming a lens updates this on restart.
+export function buildLensParamDescription(): string {
+  const menu = [...loadLenses().values()]
+    .map((l) => `'${l.name}' — ${l.blurb}`)
+    .join("; ");
+  return (
+    "Analytical frame applied via the system prompt. OMIT to auto-apply the " +
+    "'default' second-opinion frame (skipped if you pass a custom `system`); " +
+    "pass 'none' to disable framing; or choose one: " +
+    menu +
+    ". Composes with `system`: lens first, then your system text."
+  );
+}

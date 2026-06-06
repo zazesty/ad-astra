@@ -5,7 +5,7 @@ import { z } from "zod";
 import { getOdds } from "./oddsTool.js";
 import { registerGrokXSearch } from "./grokXSearch.js";
 import { registerAskGemini } from "./askGemini.js";
-import { applyLens, loadLensesRaw, LENS_PARAM_DESCRIPTION } from "./lenses.js";
+import { applyLens, loadLensesRaw, buildLensParamDescription } from "./lenses.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -36,7 +36,7 @@ function buildServer() {
           .enum(["low", "medium", "high"])
           .optional()
           .describe(`How hard Grok thinks before answering. Default ${DEFAULT_REASONING_EFFORT}. Bump to high for hard reasoning/math/debugging; drop to low for quick, cheap lookups.`),
-        lens: z.string().optional().describe(LENS_PARAM_DESCRIPTION),
+        lens: z.string().optional().describe(buildLensParamDescription()),
       },
     },
     async ({ prompt, system, model, reasoning_effort, lens }) => {

@@ -22,7 +22,7 @@
 
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { z } from "zod";
-import { applyLens, LENS_PARAM_DESCRIPTION } from "./lenses.js";
+import { applyLens, buildLensParamDescription } from "./lenses.js";
 
 type RegisterOpts = {
   apiKey: string | undefined;
@@ -74,7 +74,7 @@ export function registerAskGemini(
           .enum(["medium", "high"])
           .optional()
           .describe("How hard Gemini Pro thinks before answering. Default high; medium for lighter tasks. (For genuinely cheap/fast, pass a flash `model` slug instead. Only applies to -pro thinking models.)"),
-        lens: z.string().optional().describe(LENS_PARAM_DESCRIPTION),
+        lens: z.string().optional().describe(buildLensParamDescription()),
       },
     },
     async ({ prompt, system, grounded, model: modelOverride, reasoning_effort, lens }: any) => {
