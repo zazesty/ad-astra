@@ -5,6 +5,7 @@ import { z } from "zod";
 import { getOdds } from "./oddsTool.js";
 import { registerGrokXSearch } from "./grokXSearch.js";
 import { registerAskGemini } from "./askGemini.js";
+import { applyLens, loadLensesRaw, LENS_PARAM_DESCRIPTION } from "./lenses.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -35,14 +36,19 @@ function buildServer() {
           .enum(["low", "medium", "high"])
           .optional()
           .describe(`How hard Grok thinks before answering. Default ${DEFAULT_REASONING_EFFORT}. Bump to high for hard reasoning/math/debugging; drop to low for quick, cheap lookups.`),
+        lens: z.string().optional().describe(LENS_PARAM_DESCRIPTION),
       },
     },
-    async ({ prompt, system, model, reasoning_effort }) => {
+    async ({ prompt, system, model, reasoning_effort, lens }) => {
       if (!XAI_API_KEY) {
         return { content: [{ type: "text", text: "Error: XAI_API_KEY not set." }], isError: true };
       }
+      const { system: effectiveSystem, error: lensError } = applyLens(lens, system);
+      if (lensError) {
+        return { content: [{ type: "text", text: lensError }], isError: true };
+      }
       const messages: { role: string; content: string }[] = [];
-      if (system) messages.push({ role: "system", content: system });
+      if (effectiveSystem) messages.push({ role: "system", content: effectiveSystem });
       messages.push({ role: "user", content: prompt });
       try {
         const res = await fetch(`${XAI_BASE_URL}/chat/completions`, {
@@ -98,6 +104,21 @@ function buildServer() {
 
   registerGrokXSearch(server, { apiKey: XAI_API_KEY, baseUrl: XAI_BASE_URL, model: DEFAULT_MODEL });
   registerAskGemini(server, { apiKey: GEMINI_API_KEY });
+
+  // Lens menu as a readable resource (not a tool param), so any client can
+  // discover the frames and edits to lenses.md need no schema change / redeploy.
+  server.registerResource(
+    "lenses",
+    "lenses://frames",
+    {
+      title: "Analytical lenses",
+      description: "Menu of analytical frames. Pass a lens name in the `lens` param of ask_grok/ask_gemini to apply it via the system prompt.",
+      mimeType: "text/markdown",
+    },
+    async (uri) => ({
+      contents: [{ uri: uri.href, mimeType: "text/markdown", text: loadLensesRaw() || "(no lenses defined)" }],
+    }),
+  );
 
   return server;
 }

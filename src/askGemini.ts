@@ -22,6 +22,7 @@
 
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { z } from "zod";
+import { applyLens, LENS_PARAM_DESCRIPTION } from "./lenses.js";
 
 type RegisterOpts = {
   apiKey: string | undefined;
@@ -73,14 +74,19 @@ export function registerAskGemini(
           .enum(["medium", "high"])
           .optional()
           .describe("How hard Gemini Pro thinks before answering. Default high; medium for lighter tasks. (For genuinely cheap/fast, pass a flash `model` slug instead. Only applies to -pro thinking models.)"),
+        lens: z.string().optional().describe(LENS_PARAM_DESCRIPTION),
       },
     },
-    async ({ prompt, system, grounded, model: modelOverride, reasoning_effort }: any) => {
+    async ({ prompt, system, grounded, model: modelOverride, reasoning_effort, lens }: any) => {
       if (!ai) {
         return {
           content: [{ type: "text", text: "Error: GEMINI_API_KEY not set." }],
           isError: true,
         };
+      }
+      const { system: effectiveSystem, error: lensError } = applyLens(lens, system);
+      if (lensError) {
+        return { content: [{ type: "text", text: lensError }], isError: true };
       }
       if (prompt.length > MAX_PROMPT_CHARS) {
         return {
@@ -106,7 +112,7 @@ export function registerAskGemini(
           model: resolvedModel,
           contents: prompt,
           config: {
-            ...(system ? { systemInstruction: system } : {}),
+            ...(effectiveSystem ? { systemInstruction: effectiveSystem } : {}),
             ...(isThinkingModel ? { thinkingConfig: { thinkingLevel } } : {}),
             ...(grounded ? { tools: [{ googleSearch: {} }] } : {}),
           },
