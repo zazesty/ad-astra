@@ -56,6 +56,10 @@ export function registerAskGemini(
             message: "prompt must not be empty or whitespace-only",
           })
           .describe("The full prompt/question. For grounded queries, state the current date/time and ask explicitly for sources and timestamps."),
+        system: z
+          .string()
+          .optional()
+          .describe("Optional system instruction — persona, tone, output format, or constraints applied before the prompt."),
         grounded: z
           .boolean()
           .optional()
@@ -65,12 +69,12 @@ export function registerAskGemini(
           .optional()
           .describe(`Optional model slug. Default ${model}.`),
         reasoning_effort: z
-          .enum(["low", "medium", "high"])
+          .enum(["medium", "high"])
           .optional()
-          .describe("How hard Gemini Pro thinks before answering. Default high. Drop to low/medium for quick lookups. (Only applies to -pro thinking models.)"),
+          .describe("How hard Gemini Pro thinks before answering. Default high; medium for lighter tasks. (For genuinely cheap/fast, pass a flash `model` slug instead. Only applies to -pro thinking models.)"),
       },
     },
-    async ({ prompt, grounded, model: modelOverride, reasoning_effort }: any) => {
+    async ({ prompt, system, grounded, model: modelOverride, reasoning_effort }: any) => {
       if (!ai) {
         return {
           content: [{ type: "text", text: "Error: GEMINI_API_KEY not set." }],
@@ -101,6 +105,7 @@ export function registerAskGemini(
           model: resolvedModel,
           contents: prompt,
           config: {
+            ...(system ? { systemInstruction: system } : {}),
             ...(isThinkingModel ? { thinkingConfig: { thinkingLevel } } : {}),
             ...(grounded ? { tools: [{ googleSearch: {} }] } : {}),
           },
