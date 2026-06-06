@@ -5,6 +5,10 @@ name in the `lens` parameter (e.g. `lens: "pre-mortem"`). The lens text is
 prepended to the system instruction; an explicit `system` argument is appended
 after it.
 
+The **`default`** frame below is applied AUTOMATICALLY when no `lens` is passed
+(and no custom `system` is given). Pass one of the other lenses to override it,
+or `lens: "none"` to disable framing entirely.
+
 Edit this file to add, reword, or remove lenses — no rebuild or schema change is
 needed, and the changes are picked up on the next call (the file is read live).
 Each lens is an H2 heading (`## name`); the first line under it is the one-line
