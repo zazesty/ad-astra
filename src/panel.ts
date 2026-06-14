@@ -85,7 +85,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     reasoning_effort: z
       .enum(["low", "medium", "high"])
       .optional()
-      .describe("How hard the model thinks before answering. Applies to Gemini (default high; 'low' is raised to medium since Gemini Pro thinking is medium/high) and to UNGROUNDED Grok (default medium). Grounded Grok ignores this and runs at the API default effort."),
+      .describe("How hard the model thinks before answering. Applies to Gemini (default high; 'low' is raised to medium since Gemini Pro thinking is medium/high) and to Grok, grounded or ungrounded (default high)."),
     temperature: z
       .number()
       .optional()

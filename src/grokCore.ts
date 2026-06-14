@@ -15,9 +15,9 @@
  *
  * System prompts on the /responses path go in the top-level `instructions`
  * field (verified live 2026-06-14: accepted and honoured; the {role:"system"}
- * input-message form is not relied upon). reasoning_effort is sent ONLY on the
- * /chat/completions path — the proven /responses x_search call never sent it and
- * we don't want to risk a 400 on the grounded path. callGrok takes an
+ * input-message form is not relied upon). reasoning_effort is honoured on BOTH
+ * paths: flat `reasoning_effort` on /chat/completions, nested `reasoning.effort`
+ * on /responses (the flat field is ignored there). callGrok takes an
  * already-resolved `system` string; lens resolution is the caller's job.
  *
  * callGrok THROWS on any failure (HTTP error, or required-mode empty citations)
@@ -48,7 +48,7 @@ export interface GrokResult {
 
 const DEFAULT_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_MODEL = "grok-4.3";
-const DEFAULT_REASONING_EFFORT = "medium";
+const DEFAULT_REASONING_EFFORT = "high";
 
 export async function callGrok(
   apiKey: string | undefined,
@@ -131,8 +131,12 @@ async function callGrokGrounded(
   // System prompt → top-level `instructions` (verified accepted+honoured on /responses).
   if (opts.system) body.instructions = opts.system;
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
-  // NOTE: reasoning_effort is deliberately NOT sent on /responses — the proven
-  // x_search path never sent it; grounded calls run at the API default effort.
+  // Effort on /responses goes in the NESTED `reasoning.effort` object — the flat
+  // `reasoning_effort` field (what /chat/completions uses) is silently ignored
+  // here (probed 2026-06-14: flat = no change vs baseline; nested ~3.6x'd the
+  // reasoning tokens, no 400). xAI's grounded default is "low"; we override to
+  // DEFAULT_REASONING_EFFORT (high) so live search thinks as hard as the rest.
+  body.reasoning = { effort: opts.reasoning_effort ?? DEFAULT_REASONING_EFFORT };
 
   const resp = await fetch(`${baseUrl}/responses`, {
     method: "POST",
