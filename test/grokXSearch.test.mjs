@@ -1,15 +1,16 @@
 /**
- * Regression tests for grok_x_search. Run AFTER `npm run build` (imports the
- * compiled helper) with the MCP service running.
+ * Regression tests for the shared Grok core (used by grok_x_search and by
+ * ask_panel's grounded Grok specs). Run AFTER `npm run build` (imports the
+ * compiled helpers) with the MCP service running.
  *
  *   node test/grokXSearch.test.mjs        # uses http://127.0.0.1:3000/mcp
  *   MCP_URL=... node test/grokXSearch.test.mjs
  *
- * No test triggers a billed x_search: the empty-result case is a pure unit test
- * on buildXSearchResult, and the empty-query / malformed-date cases are rejected
- * by zod before any call to xAI.
+ * No test triggers a billed search: the parse + live-or-nothing contract are
+ * pure unit tests on grokCore helpers, and the empty-query / malformed-date
+ * cases are rejected by zod before any call to xAI.
  */
-import { buildXSearchResult } from "../build/grokXSearch.js";
+import { extractAnswerAndCitations, applyGroundingContract } from "../build/grokCore.js";
 
 const MCP_URL = process.env.MCP_URL ?? "http://127.0.0.1:3000/mcp";
 let pass = 0;
@@ -24,35 +25,73 @@ function check(name, cond) {
   }
 }
 
-// --- Unit: buildXSearchResult (deterministic, no network) ---
-console.log("Unit: buildXSearchResult");
+// --- Unit: extractAnswerAndCitations (deterministic, no network) ---
+console.log("Unit: extractAnswerAndCitations");
 
-// 1. Empty-result window: answer present, structured citations empty => hard error
+// 1. Flat shape: output_text + citations[]
 {
-  const r = buildXSearchResult({
-    output_text: "Some confident parametric answer with no sources.",
-    citations: [],
-  });
-  check("empty citations -> isError", r.isError === true);
-  check("empty citations -> 'No live X posts' message", /No live X posts/.test(r.content?.[0]?.text ?? ""));
-}
-
-// 2. Happy path: answer + citations => success passthrough
-{
-  const r = buildXSearchResult({
+  const r = extractAnswerAndCitations({
     output_text: "Real synthesized answer.",
     citations: ["https://x.com/user/status/123"],
   });
-  check("happy path -> not error", !r.isError);
-  const parsed = JSON.parse(r.content[0].text);
-  check("happy path -> answer passed through", parsed.answer === "Real synthesized answer.");
-  check("happy path -> citation passed through", parsed.citations.includes("https://x.com/user/status/123"));
+  check("flat: answer parsed", r.text === "Real synthesized answer.");
+  check("flat: citation parsed", r.citations.includes("https://x.com/user/status/123"));
+}
+
+// 2. Nested Responses shape: output[].content[].text + annotations[].url
+{
+  const r = extractAnswerAndCitations({
+    output: [
+      { type: "reasoning" },
+      {
+        type: "message",
+        content: [
+          { text: "Nested answer.", annotations: [{ url: "https://x.com/a/status/9" }] },
+        ],
+      },
+    ],
+  });
+  check("nested: answer parsed", r.text === "Nested answer.");
+  check("nested: annotation citation parsed", r.citations.includes("https://x.com/a/status/9"));
+}
+
+// 3. No citations => empty array (the signal the contract acts on)
+{
+  const r = extractAnswerAndCitations({ output_text: "Sourceless parametric answer.", citations: [] });
+  check("no citations => empty array", r.citations.length === 0);
+}
+
+// --- Unit: applyGroundingContract (live-or-nothing) ---
+console.log("Unit: applyGroundingContract");
+
+// 4. required + empty citations => throws "No live X posts"
+{
+  let threw = false;
+  try {
+    applyGroundingContract({ text: "Confident parametric answer.", citations: [] }, "required");
+  } catch (e) {
+    threw = /No live X posts/.test(e.message);
+  }
+  check("required + empty => throws 'No live X posts'", threw);
+}
+
+// 5. required + citations => passes through
+{
+  const result = { text: "Grounded answer.", citations: ["https://x.com/u/status/1"] };
+  const r = applyGroundingContract(result, "required");
+  check("required + citations => passthrough", r.text === "Grounded answer." && r.citations.length === 1);
+}
+
+// 6. auto + empty citations => passes through (parametric is legitimate here)
+{
+  const r = applyGroundingContract({ text: "Model chose not to search.", citations: [] }, "auto");
+  check("auto + empty => passthrough (no throw)", r.text === "Model chose not to search.");
 }
 
 // --- Integration: live MCP zod validation (free; rejected pre-fetch) ---
 console.log("Integration: live MCP zod validation");
 
-async function callTool(args) {
+async function callTool(name, args) {
   const res = await fetch(MCP_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
@@ -60,7 +99,7 @@ async function callTool(args) {
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
-      params: { name: "grok_x_search", arguments: args },
+      params: { name, arguments: args },
     }),
   });
   const text = await res.text();
@@ -69,16 +108,28 @@ async function callTool(args) {
 }
 const isError = (r) => r.error != null || r.result?.isError === true;
 
-// 3. Empty query -> validation error (no billed call)
+// 7. grok_x_search empty query -> validation error (no billed call)
 {
-  const r = await callTool({ query: "" });
-  check("empty query -> error", isError(r));
+  const r = await callTool("grok_x_search", { query: "" });
+  check("grok_x_search empty query -> error", isError(r));
 }
 
-// 4. Malformed date -> validation error (no billed call)
+// 8. grok_x_search malformed date -> validation error (no billed call)
 {
-  const r = await callTool({ query: "fed rate decision", from_date: "06-01-2026" });
-  check("malformed from_date -> error", isError(r));
+  const r = await callTool("grok_x_search", { query: "fed rate decision", from_date: "06-01-2026" });
+  check("grok_x_search malformed from_date -> error", isError(r));
+}
+
+// 9. ask_panel empty specs -> validation error (no billed call)
+{
+  const r = await callTool("ask_panel", { specs: [] });
+  check("ask_panel empty specs -> error", isError(r));
+}
+
+// 10. ask_panel spec with empty prompt -> validation error (no billed call)
+{
+  const r = await callTool("ask_panel", { specs: [{ model: "grok", prompt: "" }] });
+  check("ask_panel empty prompt -> error", isError(r));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

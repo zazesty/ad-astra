@@ -4,76 +4,17 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { getOdds } from "./oddsTool.js";
 import { registerGrokXSearch } from "./grokXSearch.js";
-import { registerAskGemini } from "./askGemini.js";
-import { applyLens, loadLensesRaw, buildLensParamDescription } from "./lenses.js";
+import { registerAskPanel } from "./panel.js";
+import { loadLensesRaw } from "./lenses.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const XAI_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_MODEL = "grok-4.3";
-const DEFAULT_REASONING_EFFORT = "medium";
 const PORT = Number(process.env.PORT ?? 3000);
 
 function buildServer() {
   const server = new McpServer({ name: "grok-mcp-remote", version: "1.0.0" });
-
-  server.registerTool(
-    "ask_grok",
-    {
-      title: "Ask Grok",
-      description:
-        "Send a prompt to xAI's Grok and return its response. Use for a second opinion, a contrarian take, or Grok's specific perspective.",
-      inputSchema: {
-        prompt: z
-          .string()
-          .refine((s) => s.trim().length > 0, {
-            message: "prompt must not be empty or whitespace-only",
-          })
-          .describe("The question or prompt to send to Grok."),
-        system: z.string().optional().describe("Optional system instruction."),
-        model: z.string().optional().describe(`Optional model slug. Default ${DEFAULT_MODEL}.`),
-        reasoning_effort: z
-          .enum(["low", "medium", "high"])
-          .optional()
-          .describe(`How hard Grok thinks before answering. Default ${DEFAULT_REASONING_EFFORT}. Bump to high for hard reasoning/math/debugging; drop to low for quick, cheap lookups.`),
-        lens: z.string().optional().describe(buildLensParamDescription()),
-      },
-    },
-    async ({ prompt, system, model, reasoning_effort, lens }) => {
-      if (!XAI_API_KEY) {
-        return { content: [{ type: "text", text: "Error: XAI_API_KEY not set." }], isError: true };
-      }
-      const { system: effectiveSystem, error: lensError } = applyLens(lens, system);
-      if (lensError) {
-        return { content: [{ type: "text", text: lensError }], isError: true };
-      }
-      const messages: { role: string; content: string }[] = [];
-      if (effectiveSystem) messages.push({ role: "system", content: effectiveSystem });
-      messages.push({ role: "user", content: prompt });
-      try {
-        const res = await fetch(`${XAI_BASE_URL}/chat/completions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${XAI_API_KEY}` },
-          body: JSON.stringify({
-            model: model ?? DEFAULT_MODEL,
-            reasoning_effort: reasoning_effort ?? DEFAULT_REASONING_EFFORT,
-            messages,
-          }),
-        });
-        if (!res.ok) {
-          return { content: [{ type: "text", text: `xAI API error ${res.status}: ${await res.text()}` }], isError: true };
-        }
-        const data = await res.json();
-        // Observability: ground-truth which model actually served the response
-        // (xAI silently routes legacy aliases). Goes to journald, not the reply.
-        console.error(`[ask_grok] model: requested=${model ?? DEFAULT_MODEL} resolved=${data?.model ?? "?"}`);
-        const reply = data?.choices?.[0]?.message?.content ?? "(no content returned)";
-        return { content: [{ type: "text", text: reply }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `Request failed: ${(err as Error).message}` }], isError: true };
-      }
-    }
-  );
 
   server.registerTool(
     "get_odds",
@@ -103,7 +44,7 @@ function buildServer() {
   );
 
   registerGrokXSearch(server, { apiKey: XAI_API_KEY, baseUrl: XAI_BASE_URL, model: DEFAULT_MODEL });
-  registerAskGemini(server, { apiKey: GEMINI_API_KEY });
+  registerAskPanel(server, { xaiApiKey: XAI_API_KEY, geminiApiKey: GEMINI_API_KEY, xaiBaseUrl: XAI_BASE_URL });
 
   // Lens menu as a readable resource (not a tool param), so any client can
   // discover the frames and edits to lenses.md need no schema change / redeploy.
@@ -112,7 +53,7 @@ function buildServer() {
     "lenses://frames",
     {
       title: "Analytical lenses",
-      description: "Menu of analytical frames. Pass a lens name in the `lens` param of ask_grok/ask_gemini to apply it via the system prompt.",
+      description: "Menu of analytical frames. Pass a lens name in the `lens` field of an ask_panel spec to apply it via the system prompt.",
       mimeType: "text/markdown",
     },
     async (uri) => ({
