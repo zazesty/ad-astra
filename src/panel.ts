@@ -16,12 +16,20 @@
 
 import { z } from "zod";
 import { callGrok, type Grounding } from "./grokCore.js";
-import { callGemini, makeGeminiClient, type GeminiClient } from "./geminiCore.js";
+import {
+  callGemini,
+  callGeminiViaOpenRouter,
+  makeGeminiClient,
+  type GeminiClient,
+  type GeminiTransport,
+} from "./geminiCore.js";
 import { applyLens, buildLensParamDescription } from "./lenses.js";
 
 type RegisterOpts = {
   xaiApiKey: string | undefined;
   geminiApiKey: string | undefined;
+  openrouterApiKey: string | undefined;
+  geminiTransport: GeminiTransport;
   xaiBaseUrl?: string;
 };
 
@@ -56,6 +64,7 @@ async function mapLimit<T, R>(
 export function registerAskPanel(server: any, opts: RegisterOpts) {
   const geminiClient: GeminiClient | null = makeGeminiClient(opts.geminiApiKey);
   const xaiBaseUrl = opts.xaiBaseUrl;
+  const geminiTransport = opts.geminiTransport;
 
   const specSchema = z.object({
     model: z
@@ -143,15 +152,21 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           );
           return { text: r.text, citations: r.citations };
         }
-        // gemini
-        const r = await callGemini(geminiClient, spec.prompt, {
+        // gemini — transport chosen by GEMINI_TRANSPORT (env). The OpenRouter
+        // path (BYOK) handles both ungrounded and grounded specs; grounded forces
+        // engine:"native" inside callGeminiViaOpenRouter (real Google grounding).
+        const geminiOpts = {
           system,
           model: spec.model_slug,
           grounded: spec.grounded,
           reasoning_effort: spec.reasoning_effort,
           temperature: spec.temperature,
-        });
-        return { text: r.text, citations: [] as string[] };
+        };
+        const r =
+          geminiTransport === "openrouter"
+            ? await callGeminiViaOpenRouter(opts.openrouterApiKey, spec.prompt, geminiOpts)
+            : await callGemini(geminiClient, spec.prompt, geminiOpts);
+        return { text: r.text, citations: r.citations };
       });
 
       const results = settled.map((r, i) => {

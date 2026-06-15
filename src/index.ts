@@ -9,6 +9,11 @@ import { loadLensesRaw } from "./lenses.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+// Which transport ask_panel's gemini specs use. Defaults to "direct" (@google/genai
+// SDK) until the OpenRouter BYOK path clears its verification gates; flip to
+// "openrouter" in the env to route Gemini through OpenRouter. Grok is unaffected.
+const GEMINI_TRANSPORT = process.env.GEMINI_TRANSPORT === "openrouter" ? "openrouter" : "direct";
 const XAI_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_MODEL = "grok-4.3";
 const PORT = Number(process.env.PORT ?? 3000);
@@ -44,7 +49,13 @@ function buildServer() {
   );
 
   registerGrokXSearch(server, { apiKey: XAI_API_KEY, baseUrl: XAI_BASE_URL, model: DEFAULT_MODEL });
-  registerAskPanel(server, { xaiApiKey: XAI_API_KEY, geminiApiKey: GEMINI_API_KEY, xaiBaseUrl: XAI_BASE_URL });
+  registerAskPanel(server, {
+    xaiApiKey: XAI_API_KEY,
+    geminiApiKey: GEMINI_API_KEY,
+    openrouterApiKey: OPENROUTER_API_KEY,
+    geminiTransport: GEMINI_TRANSPORT,
+    xaiBaseUrl: XAI_BASE_URL,
+  });
 
   // Lens menu as a readable resource (not a tool param), so any client can
   // discover the frames and edits to lenses.md need no schema change / redeploy.

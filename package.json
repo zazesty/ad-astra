@@ -5,7 +5,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node build/index.js",
-    "test": "node test/grokXSearch.test.mjs"
+    "test": "node test/grokXSearch.test.mjs && node test/geminiCore.test.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.7.0",
