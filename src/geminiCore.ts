@@ -80,6 +80,7 @@ export async function callGemini(
   const effort = opts.reasoning_effort === "low" ? "medium" : opts.reasoning_effort ?? "high";
   const thinkingLevel = ThinkingLevel[effort.toUpperCase() as keyof typeof ThinkingLevel];
 
+  const t0 = Date.now();
   const resp = await ai.models.generateContent({
     model: resolvedModel,
     contents: prompt,
@@ -90,11 +91,39 @@ export async function callGemini(
       ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
     },
   });
+  const ms = Date.now() - t0;
 
-  // Observability: `gemini-pro-latest` will silently flip (e.g. to 3.5 Pro) at a
-  // higher price point; log the model that actually served. journald only.
-  console.error(`[callGemini] direct model: requested=${resolvedModel} resolved=${resp.modelVersion ?? "?"}`);
-  return { text: resp.text ?? "(no text returned)", citations: [] };
+  // Surface Google's grounding metadata as citations. Previously this path
+  // returned citations:[] unconditionally, which made EVERY grounded direct call
+  // look ungrounded (a silent grounding miss indistinguishable from a real
+  // weights-only answer). Shape (@google/genai v2.7.0): candidates[0]
+  // .groundingMetadata.groundingChunks[].web.uri.
+  const citations = extractDirectCitations(resp);
+
+  // Observability: model that actually served (`gemini-pro-latest` silently flips
+  // at a higher price point), plus the grounding signal we now key the fail-loud
+  // contract off of. journald only, not the reply.
+  console.error(
+    `[callGemini] direct requested=${resolvedModel} resolved=${resp.modelVersion ?? "?"} ` +
+      `grounded=${!!opts.grounded} effort=${effort} ms=${ms} citations=${citations.length}`,
+  );
+  return { text: resp.text ?? "(no text returned)", citations };
+}
+
+/**
+ * Pure parser for an @google/genai response → citation URLs from Google's
+ * groundingMetadata. Exported for unit tests. Empty array = grounding did not
+ * fire (or the model chose not to search); the caller's grounding contract
+ * decides what to do with that.
+ */
+export function extractDirectCitations(resp: any): string[] {
+  const citations: string[] = [];
+  const chunks = resp?.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
+  for (const c of chunks) {
+    const u = c?.web?.uri ?? c?.retrievedContext?.uri;
+    if (u) citations.push(u);
+  }
+  return citations;
 }
 
 /**
@@ -138,6 +167,7 @@ export async function callGeminiViaOpenRouter(
   // gateway (same index/sources as the direct path). Never Exa.
   if (opts.grounded) body.plugins = [{ id: "web", engine: "native" }];
 
+  const t0 = Date.now();
   const res = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
@@ -148,9 +178,13 @@ export async function callGeminiViaOpenRouter(
       "X-Title": "grok-mcp",
     },
     body: JSON.stringify(body),
-    // Grounded search + high reasoning can run long; give it headroom.
+    // Grounded search + high reasoning can run long; give it headroom. Measured
+    // p90 for a grounded high-effort call is ~3-6s, so 120s is already ~20x the
+    // observed worst case — the timeout is NOT the bottleneck here. A timeout
+    // here aborts the whole round-trip (throws below), never a clean answer.
     signal: AbortSignal.timeout(120_000),
   });
+  const ms = Date.now() - t0;
   if (!res.ok) {
     throw new Error(
       `OpenRouter /chat/completions error ${res.status}: ${(await res.text().catch(() => "")).slice(0, 600)}`,
@@ -158,10 +192,16 @@ export async function callGeminiViaOpenRouter(
   }
 
   const data: any = await res.json();
-  // Observability: which model OpenRouter actually served (the floating alias can
-  // flip). Keeps the gemini-model-check guard meaningful on this path too.
-  console.error(`[callGemini] openrouter model: requested=${model} resolved=${data?.model ?? "?"}`);
-  return extractOpenRouterResult(data);
+  const result = extractOpenRouterResult(data);
+  // Observability: model OpenRouter actually served (the floating alias can flip;
+  // keeps the gemini-model-check guard meaningful here too), plus the grounding
+  // signal the fail-loud contract keys off. journald only.
+  console.error(
+    `[callGemini] openrouter requested=${model} resolved=${data?.model ?? "?"} ` +
+      `grounded=${!!opts.grounded} effort=${effort} ms=${ms} ` +
+      `finish=${data?.choices?.[0]?.finish_reason ?? "?"} citations=${result.citations.length}`,
+  );
+  return result;
 }
 
 /**

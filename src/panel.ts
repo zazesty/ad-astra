@@ -162,10 +162,34 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           reasoning_effort: spec.reasoning_effort,
           temperature: spec.temperature,
         };
-        const r =
+        const callGeminiOnce = () =>
           geminiTransport === "openrouter"
-            ? await callGeminiViaOpenRouter(opts.openrouterApiKey, spec.prompt, geminiOpts)
-            : await callGemini(geminiClient, spec.prompt, geminiOpts);
+            ? callGeminiViaOpenRouter(opts.openrouterApiKey, spec.prompt, geminiOpts)
+            : callGemini(geminiClient, spec.prompt, geminiOpts);
+
+        let r = await callGeminiOnce();
+        // FAIL LOUD, not soft. Gemini grounding (googleSearch / engine:"native")
+        // is model-discretion: the model decides whether to search, so a grounded
+        // spec can come back weights-only with ZERO citations — a clean answer
+        // indistinguishable from a real grounded one. That's the dangerous case
+        // (e.g. the journaling routine then "answers" recent events from stale
+        // weights). So: when grounding was REQUESTED but no citations came back,
+        // retry once; if it's still ungrounded, throw rather than return the
+        // sourceless answer. ask_panel's allSettled turns this into ok:false with
+        // the message below, so the caller sees grounding_fired:false explicitly.
+        // (Mirrors grokCore's applyGroundingContract for the "required" contract.)
+        if (spec.grounded && r.citations.length === 0) {
+          const label = spec.label ?? "gemini";
+          console.error(`[ask_panel] gemini grounded miss (0 citations) — retrying once. label=${label}`);
+          r = await callGeminiOnce();
+          if (r.citations.length === 0) {
+            throw new Error(
+              "grounding_fired:false — Gemini grounded request returned zero citations after one " +
+                "retry. Refusing to pass back a weights-only answer as if it were grounded; the " +
+                "answer may be stale/hallucinated. Retry, rephrase to demand sources, or use a grok spec.",
+            );
+          }
+        }
         return { text: r.text, citations: r.citations };
       });
 

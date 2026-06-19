@@ -6,7 +6,7 @@
  *
  *   node test/geminiCore.test.mjs
  */
-import { extractOpenRouterResult } from "../build/geminiCore.js";
+import { extractOpenRouterResult, extractDirectCitations } from "../build/geminiCore.js";
 
 let pass = 0;
 let fail = 0;
@@ -71,6 +71,30 @@ console.log("Unit: extractOpenRouterResult");
 {
   const r = extractOpenRouterResult({});
   check("no choices => placeholder", r.text === "(no content returned)" && r.citations.length === 0);
+}
+
+console.log("\nUnit: extractDirectCitations (@google/genai groundingMetadata)");
+
+// 6. Grounded direct response: groundingChunks[].web.uri => citations in order.
+{
+  const c = extractDirectCitations({
+    candidates: [{ groundingMetadata: { groundingChunks: [
+      { web: { uri: "https://news.example/1", title: "1" } },
+      { web: { uri: "https://news.example/2", title: "2" } },
+    ] } }],
+  });
+  check("direct grounded: uris parsed in order", c.join(",") === "https://news.example/1,https://news.example/2");
+}
+
+// 7. Ungrounded direct response (no groundingMetadata) => empty => contract fires.
+{
+  const c = extractDirectCitations({ candidates: [{ content: { parts: [{ text: "weights-only" }] } }] });
+  check("direct ungrounded: no groundingMetadata => empty", c.length === 0);
+}
+
+// 8. Malformed/empty payload => empty, no throw.
+{
+  check("direct malformed => empty", extractDirectCitations({}).length === 0 && extractDirectCitations(null).length === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
