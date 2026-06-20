@@ -113,9 +113,20 @@ you call tool -> fetch curated feeds (last N days) -> dedupe -> LLM COMPRESS -> 
   rebuild/restart. Adding a source = drop a `{source, url}` into a section. The
   curated list **is** the quality control — the summarizer has no web access, so a
   source not in `feeds.json` cannot enter the digest.
-- **Params:** `days` (default 4), `sections` (default all), `email` (default true),
-  `max_items` (default 18). `industry` is hard-capped (ambient awareness, not a
-  dashboard); other sections share the remaining budget by recency.
+- **Params:** `days` (default 4 — the recency window, e.g. 7 for "last week"),
+  `since_last_call` (bool — only items new since the previous run, via a stored
+  timestamp; falls back to `days` on the first-ever call), `sections` (default all),
+  `email` (default true), `max_items` (default 18). `industry` is hard-capped
+  (ambient awareness, not a dashboard); other sections share the remaining budget
+  by recency.
+- **Run-state:** `since_last_call` reads/writes `.news-digest-state.json` (repo
+  root, gitignored — operational state, not config). The timestamp advances on
+  every successful run.
+- **Feeds (`feeds.json`) — per-source `enabled: false`** keeps a source documented
+  without paying its fetch timeout. Used for **Michael Pettis** (mpettis.com is
+  IP-blocked from the box); **Brad Setser / Follow the Money** covers the same
+  balance-of-payments lens and is the active challenger in his place. G&R uses its
+  live `blog.gorozen.com` feed.
 - **Compress, don't amplify.** The system prompt forces ruthless dedup, 1–2 lines
   per item, no hype, and *quiet-when-quiet* (a slow week says so, never pads).
 - **Prior-challenging voices** (Wang, Pettis, Tooze) are flagged `challenger` in

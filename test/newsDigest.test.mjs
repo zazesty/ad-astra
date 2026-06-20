@@ -57,10 +57,13 @@ const ok = (name) => { console.log(`ok - ${name}`); pass++; };
   assert.equal(cfg.sections.industry.cap, 3, "industry section is hard-capped at 3");
   // challenger voices must be present and flagged
   const challengers = cfg.sections.macro.feeds.filter((f) => f.challenger).map((f) => f.source);
-  for (const name of ["Joseph Wang / FedGuy", "Michael Pettis", "Adam Tooze / Chartbook"]) {
+  for (const name of ["Joseph Wang / FedGuy", "Adam Tooze / Chartbook", "Brad Setser / Follow the Money"]) {
     assert.ok(challengers.includes(name), `${name} flagged challenger`);
   }
-  ok("feeds.json parses; sections + capped industry + flagged challengers present");
+  // Pettis kept documented but DISABLED (IP-blocked) so it costs no per-call timeout.
+  const pettis = cfg.sections.macro.feeds.find((f) => f.source === "Michael Pettis");
+  assert.ok(pettis && pettis.enabled === false, "Pettis present but disabled (documented, no fetch cost)");
+  ok("feeds.json parses; sections + capped industry + challengers (incl. Setser) present; Pettis disabled");
 }
 
 // --- matchesKeywords: word boundaries, not substrings ----------------------

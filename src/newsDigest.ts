@@ -25,13 +25,17 @@
  * required-voice URL to swap).
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import Parser from "rss-parser";
 import { callGemini, callGeminiViaOpenRouter, makeGeminiClient, type GeminiTransport } from "./geminiCore.js";
 import { callGrok } from "./grokCore.js";
 import { sendEmail } from "./email.js";
 
 const FEEDS_PATH = new URL("../feeds.json", import.meta.url);
+// Tiny state file (repo root, gitignored): remembers the last run time so the
+// `since_last_call` window — "what's new since I last looked" — works. Operational
+// state, not config, so it's deliberately NOT committed.
+const STATE_PATH = new URL("../.news-digest-state.json", import.meta.url);
 
 // Bound the summarizer prompt so one big fetch can't run up tokens. The model
 // dedupes anyway; this is just a ceiling on how much raw feed text we hand it.
@@ -48,6 +52,9 @@ type FeedSpec = {
   url: string;
   keyword_filter?: string[];
   challenger?: boolean;
+  // enabled:false keeps a source documented in feeds.json (e.g. an IP-blocked
+  // required voice) WITHOUT paying its per-call fetch timeout. Flip to re-enable.
+  enabled?: boolean;
   note?: string;
 };
 type SectionSpec = { title: string; cap: number | null; note?: string; feeds: FeedSpec[] };
@@ -86,6 +93,29 @@ export function loadFeedsConfig(): FeedsConfig {
     throw new Error("feeds.json has no 'sections' object.");
   }
   return cfg;
+}
+
+// --- run-state (for the `since_last_call` window) ---------------------------
+export type DigestState = { last_call?: string };
+
+/** Read the last-run timestamp; missing/garbage file => {} (treated as no prior call). */
+export function loadState(): DigestState {
+  try {
+    return JSON.parse(readFileSync(STATE_PATH, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+/** Persist the last-run timestamp. Non-fatal on failure — a digest is still useful
+ * even if we couldn't record the timestamp; we just log it (next since_last_call
+ * would fall back to `days`). */
+export function saveState(state: DigestState): void {
+  try {
+    writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+  } catch (e) {
+    console.error(`[get_news_digest] could not persist state: ${(e as Error).message}`);
+  }
 }
 
 // --- title normalization for near-duplicate clustering ----------------------
@@ -141,20 +171,20 @@ export function matchesKeywords(item: any, keywords?: string[]): boolean {
 }
 
 /**
- * Fetch all feeds for the requested sections, keep items within `days`, apply
- * per-feed keyword filters and per-section caps, and dedupe by URL + near-dup
+ * Fetch all feeds for the requested sections, keep items newer than `cutoffMs`,
+ * apply per-feed keyword filters and per-section caps, and dedupe by URL + near-dup
  * title. Dead/timing-out feeds are collected into `failed`, never thrown.
- * `nowMs` is injected (not Date.now()) so this is deterministic/testable.
+ * `cutoffMs` is injected (the caller derives it from `days` or the last-call
+ * timestamp) so this stays a pure window-by-epoch fetcher.
  */
 export async function fetchDigestItems(
   cfg: FeedsConfig,
   sections: string[],
-  days: number,
+  cutoffMs: number,
   maxItems: number,
-  nowMs: number,
 ): Promise<FetchOutcome> {
   const parser = new Parser({ timeout: 15_000, headers: { "User-Agent": "astra-news-digest/1.0 (+rss)" } });
-  const cutoff = nowMs - days * 24 * 60 * 60 * 1000;
+  const cutoff = cutoffMs;
   const failed: FetchOutcome["failed"] = [];
   const bySectionItems: Record<string, DigestItem[]> = {};
 
@@ -167,7 +197,12 @@ export async function fetchDigestItems(
       continue;
     }
     bySectionItems[key] = [];
-    for (const feed of section.feeds) jobs.push({ sectionKey: key, section, feed });
+    // Skip enabled:false feeds entirely — they stay documented in feeds.json but
+    // cost no fetch/timeout (e.g. an IP-blocked source kept as a reminder).
+    for (const feed of section.feeds) {
+      if (feed.enabled === false) continue;
+      jobs.push({ sectionKey: key, section, feed });
+    }
   }
 
   await Promise.all(
@@ -273,10 +308,10 @@ function buildSummarizerUserPrompt(
   items: DigestItem[],
   cfg: FeedsConfig,
   sections: string[],
-  days: number,
+  windowLabel: string,
 ): string {
   const lines: string[] = [];
-  lines.push(`Recency window: last ${days} day(s). Total items after dedupe: ${items.length}.`);
+  lines.push(`Recency window: ${windowLabel}. Total items after dedupe: ${items.length}.`);
   lines.push("");
   for (const key of sections) {
     const section = cfg.sections[key];
@@ -378,7 +413,11 @@ export function registerNewsDigest(server: any, deps: SummarizeDeps & { z: typeo
       description:
         "On-demand, COMPRESSED read of a curated set of RSS feeds (AI/frontier, macro/finance heterodox, light industry) — built to replace compulsive feed-scrolling with one quiet scan. Fetches the last N days, dedupes, has an LLM compress (NOT amplify) into a short digest, emails it to you ONCE, and returns the same digest inline. It NEVER web-searches: the curated feed list is the whole world for the digest, by design. Quiet when quiet — a slow week says so rather than padding. On-demand only; there is no schedule.",
       inputSchema: {
-        days: z.number().int().min(1).max(30).optional().describe("Recency window in days (default 4). Items older than this are dropped."),
+        days: z.number().int().min(1).max(30).optional().describe("Recency window in days (default 4). Items older than this are dropped. Use 7 for 'last week', etc. Ignored when since_last_call is true."),
+        since_last_call: z
+          .boolean()
+          .optional()
+          .describe("If true, include only items NEW since the previous time this tool ran (uses a stored last-run timestamp), instead of a fixed `days` window — i.e. 'what's new since I last looked'. The first-ever call (no timestamp yet) falls back to `days`. Every run records its time, so back-to-back since_last_call runs show only the gap between them."),
         sections: z
           .array(z.enum(["ai", "macro", "industry"]))
           .optional()
@@ -387,19 +426,45 @@ export function registerNewsDigest(server: any, deps: SummarizeDeps & { z: typeo
         max_items: z.number().int().min(1).max(60).optional().describe("Global cap on items handed to the summarizer (default 18). Capped sections like 'industry' are kept whole; the rest share the remaining budget by recency."),
       },
     },
-    async ({ days, sections, email, max_items }: { days?: number; sections?: string[]; email?: boolean; max_items?: number }) => {
+    async ({ days, since_last_call, sections, email, max_items }: { days?: number; since_last_call?: boolean; sections?: string[]; email?: boolean; max_items?: number }) => {
       try {
-        const win = days ?? 4;
         const secs = sections?.length ? sections : ["ai", "macro", "industry"];
         const sendMail = email ?? true;
         const maxItems = max_items ?? 18;
+        const now = Date.now();
+        const dayWindow = days ?? 4;
+
+        // Resolve the recency window: explicit since_last_call uses the stored
+        // last-run time (falling back to `days` on the first-ever call); otherwise
+        // a fixed `days` window. windowLabel feeds both the prompt and the report.
+        let cutoffMs: number;
+        let windowLabel: string;
+        if (since_last_call) {
+          const last = loadState().last_call;
+          const lastMs = last ? new Date(last).getTime() : NaN;
+          if (last && !isNaN(lastMs)) {
+            cutoffMs = lastMs;
+            windowLabel = `since last call (${last.slice(0, 16).replace("T", " ")} UTC)`;
+          } else {
+            cutoffMs = now - dayWindow * 24 * 60 * 60 * 1000;
+            windowLabel = `last ${dayWindow} day(s) — no prior call recorded, so since_last_call fell back to days`;
+          }
+        } else {
+          cutoffMs = now - dayWindow * 24 * 60 * 60 * 1000;
+          windowLabel = `last ${dayWindow} day(s)`;
+        }
 
         const cfg = loadFeedsConfig();
-        const { items, failed } = await fetchDigestItems(cfg, secs, win, maxItems, Date.now());
+        const { items, failed } = await fetchDigestItems(cfg, secs, cutoffMs, maxItems);
 
         // Even with zero items we still produce a digest (quiet-when-quiet says so).
-        const userPrompt = buildSummarizerUserPrompt(items, cfg, secs, win);
+        const userPrompt = buildSummarizerUserPrompt(items, cfg, secs, windowLabel);
         const { markdown, engine } = await summarize(userPrompt, deps);
+
+        // Record this run as the new "last call" so future since_last_call windows
+        // start here. Done after a successful summarize so a hard failure mid-run
+        // doesn't advance the marker past unseen items.
+        saveState({ last_call: new Date(now).toISOString() });
 
         const today = new Date().toISOString().slice(0, 10);
         const subject = `Digest — ${today} (${items.length} item${items.length === 1 ? "" : "s"})`;
@@ -426,7 +491,7 @@ export function registerNewsDigest(server: any, deps: SummarizeDeps & { z: typeo
           emailStatus = `email skipped (email:false) — ${items.length} item(s) inline only`;
         }
 
-        const header = `${emailStatus}. window=${win}d sections=${secs.join(",")} engine=${engine}${failed.length ? ` failed_feeds=${failed.length}` : ""}\n\n`;
+        const header = `${emailStatus}. window=${windowLabel} sections=${secs.join(",")} engine=${engine}${failed.length ? ` failed_feeds=${failed.length}` : ""}\n\n`;
         return { content: [{ type: "text", text: header + fullMd }] };
       } catch (err) {
         return { content: [{ type: "text", text: `get_news_digest failed: ${(err as Error).message}` }], isError: true };

@@ -10,3 +10,6 @@ build/
 backups/
 *.bak
 *.bak-*
+
+# operational run-state for get_news_digest (since_last_call timestamp); not config
+.news-digest-state.json

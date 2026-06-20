@@ -30,9 +30,10 @@
         { "source": "Construction Physics", "url": "https://www.construction-physics.com/feed" },
         { "source": "Noahpinion", "url": "https://www.noahpinion.blog/feed" },
         { "source": "Palladium", "url": "https://www.palladiummag.com/feed/" },
-        { "source": "Goehring & Rozencwajg", "url": "https://www.goehringrozencwajg.com/feed/", "note": "quarterly; low-frequency, big signal. May be unreachable from the box — swap URL here if it stays dead." },
+        { "source": "Goehring & Rozencwajg", "url": "https://blog.gorozen.com/blog/rss.xml", "note": "quarterly; low-frequency, big signal. Their own blog feed (gorozen.com); the old goehringrozencwajg.com/feed was dead from the box." },
         { "source": "Joseph Wang / FedGuy", "url": "https://fedguy.com/feed/", "challenger": true },
-        { "source": "Michael Pettis", "url": "https://mpettis.com/feed/", "challenger": true, "note": "REQUIRED prior-challenger. If this feed stays dead in the failed-feeds report, find a live Pettis URL and swap it here — do not just drop him." },
+        { "source": "Brad Setser / Follow the Money", "url": "https://feeds.cfr.org/follow-the-money", "challenger": true, "note": "Pettis-lens prior-challenger: global imbalances, capital flows, reserves, China — empirical and high-frequency. Added because mpettis.com is IP-blocked from the box (see disabled Pettis entry below)." },
+        { "source": "Michael Pettis", "url": "https://mpettis.com/feed/", "challenger": true, "enabled": false, "note": "DISABLED: mpettis.com connection times out from zaz-astra (Cloudflare/datacenter block), not a bad URL. Brad Setser above covers the same balance-of-payments lens. Re-enable (delete \"enabled\": false) if the block lifts or a reachable Pettis mirror is found — do not just drop him." },
         { "source": "Adam Tooze / Chartbook", "url": "https://adamtooze.substack.com/feed", "challenger": true }
       ]
     },
