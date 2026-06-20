@@ -1,7 +1,7 @@
 // Pure unit tests for newsDigest — no network, no billed calls.
 // Run: node test/newsDigest.test.mjs   (also wired into `npm test`)
 import assert from "node:assert";
-import { dedupe, markdownToHtml, loadFeedsConfig, matchesKeywords } from "../build/newsDigest.js";
+import { dedupe, markdownToHtml, loadFeedsConfig, matchesKeywords, resolveWindow } from "../build/newsDigest.js";
 
 let pass = 0;
 const ok = (name) => { console.log(`ok - ${name}`); pass++; };
@@ -78,6 +78,28 @@ const ok = (name) => { console.log(`ok - ${name}`); pass++; };
   assert.ok(matchesKeywords({ title: "Best local LLM of 2026" }, kw), "llm whole word hits");
   assert.equal(matchesKeywords({ title: "anything" }, undefined), true, "no filter = always match");
   ok("matchesKeywords uses word boundaries (no 'ai'-in-remains false positives)");
+}
+
+// --- resolveWindow: floor of `days`, extend to last run if longer ago -------
+{
+  const now = Date.parse("2026-06-20T12:00:00Z");
+  const DAY = 86400000;
+  // No prior run -> floor.
+  let w = resolveWindow(now, 4, undefined);
+  assert.equal(w.cutoffMs, now - 4 * DAY, "no prior run uses the 4-day floor");
+  assert.ok(/no prior run/.test(w.windowLabel), "label notes no prior run");
+  // Last run 1 hour ago (< floor) -> still the floor, NOT an hour.
+  w = resolveWindow(now, 4, new Date(now - 3600_000).toISOString());
+  assert.equal(w.cutoffMs, now - 4 * DAY, "recent last run still uses the floor (no near-empty digest)");
+  // Last run 10 days ago (> floor) -> extend back to the last run.
+  const tenAgo = new Date(now - 10 * DAY).toISOString();
+  w = resolveWindow(now, 4, tenAgo);
+  assert.equal(w.cutoffMs, Date.parse(tenAgo), "stale last run extends the window back to it");
+  assert.ok(/since last run/.test(w.windowLabel), "label notes since-last-run");
+  // Garbage timestamp -> safe fallback to floor.
+  w = resolveWindow(now, 4, "not-a-date");
+  assert.equal(w.cutoffMs, now - 4 * DAY, "unreadable timestamp falls back to floor");
+  ok("resolveWindow = max(days-floor, since-last-run) with safe fallbacks");
 }
 
 console.log(`\n${pass} passed`);

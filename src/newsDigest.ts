@@ -118,6 +118,30 @@ export function saveState(state: DigestState): void {
   }
 }
 
+/**
+ * Resolve the recency window. Policy (per user pref): the window is at LEAST
+ * `dayFloor` days, but extends to the last run if that was longer ago — i.e.
+ * lookback = max(dayFloor, timeSinceLastRun). So a frequent caller still gets a
+ * useful ~4-day digest (never a near-empty "since an hour ago"), while someone
+ * returning after two weeks catches up on the whole gap. Pure + exported for tests.
+ */
+export function resolveWindow(
+  nowMs: number,
+  dayFloor: number,
+  lastIso: string | undefined,
+): { cutoffMs: number; windowLabel: string } {
+  const floorCutoff = nowMs - dayFloor * 24 * 60 * 60 * 1000;
+  const lastMs = lastIso ? new Date(lastIso).getTime() : NaN;
+  if (lastIso && !isNaN(lastMs) && lastMs < floorCutoff) {
+    // Away longer than the floor → catch up to the last run.
+    const when = lastIso.slice(0, 16).replace("T", " ");
+    return { cutoffMs: lastMs, windowLabel: `since last run (${when} UTC, >${dayFloor}d ago)` };
+  }
+  // Within the floor, or no/unreadable last-run timestamp → use the floor.
+  const why = !lastIso ? "no prior run" : isNaN(lastMs) ? "unreadable last run" : `last run <${dayFloor}d ago`;
+  return { cutoffMs: floorCutoff, windowLabel: `last ${dayFloor} day(s) (floor; ${why})` };
+}
+
 // --- title normalization for near-duplicate clustering ----------------------
 // "OpenAI launches GPT-6!" and "OpenAI Launches GPT-6" collapse to one key.
 function normTitle(t: string): string {
@@ -297,9 +321,11 @@ const COMPRESSION_SYSTEM = `You are a COMPRESSION LAYER, not a hype engine. You 
 Rules:
 - Group by the section headers given. Use "## " markdown headers exactly matching the section titles provided.
 - Dedupe RUTHLESSLY: if one release/event is covered by several items, that's ONE line with the single best link. Merge near-duplicates across sources.
+- IMPORTANCE BAR — be SELECTIVE, not exhaustive. The reader wants only what matters. It is BETTER to show 3 important items than 10 padded ones. Drop the marginal stuff; do not list an item just because it's in the feed.
+- AI/frontier section specifically — HIGH BAR. KEEP: new model releases/launches, major capability or product launches, pricing/access/limit changes, and genuinely significant research or benchmarks. CULL: minor tooling/library/plugin updates, incremental version bumps, personal-blog musings, "interesting link" or commentary posts, and niche how-tos — UNLESS they're genuinely major. When unsure, cut it. (Example calibration: a frontier model release stays; a new Datasette plugin or a blog post musing about an MCP pattern goes.)
 - 1–2 lines per item, plain and factual. NO breathless framing, NO "this changes everything", NO editorializing. Lead with what actually shipped or changed.
 - Keep each item's source link as a markdown link on the headline.
-- QUIET WHEN QUIET: if a section has little real news, say so in one short line (e.g. "Slow week — 2 items.") rather than padding. Do NOT invent or inflate.
+- QUIET WHEN QUIET: if a section has little that clears the bar, say so in one short line (e.g. "Slow week — 2 items.") rather than padding. Do NOT invent or inflate. An empty-ish section is a valid, honest outcome.
 - Preserve the prior-challenging voices (items flagged [challenger]) even if they cut against a Bitcoin/Austrian/heterodox prior — a digest that only confirms priors is failing its job. Never drop a challenger item to make room.
 - Do NOT add anything not present in the items. You have NO web access; these feeds are the whole world for this digest.
 - Output clean markdown. Start with a one-line summary like "N items across M sections, {window}." then the sections.`;
@@ -411,13 +437,9 @@ export function registerNewsDigest(server: any, deps: SummarizeDeps & { z: typeo
     {
       title: "Get News Digest",
       description:
-        "On-demand, COMPRESSED read of a curated set of RSS feeds (AI/frontier, macro/finance heterodox, light industry) — built to replace compulsive feed-scrolling with one quiet scan. Fetches the last N days, dedupes, has an LLM compress (NOT amplify) into a short digest, emails it to you ONCE, and returns the same digest inline. It NEVER web-searches: the curated feed list is the whole world for the digest, by design. Quiet when quiet — a slow week says so rather than padding. On-demand only; there is no schedule.",
+        "On-demand, COMPRESSED read of a curated set of RSS feeds (AI/frontier, macro/finance heterodox, light industry) — built to replace compulsive feed-scrolling with one quiet scan. Fetches a recency window (default: at least the last 4 days, auto-extending back to your previous run if that was longer ago), dedupes, has an LLM compress (NOT amplify) into a short high-signal digest, emails it to you ONCE, and returns the same digest inline. It NEVER web-searches: the curated feed list is the whole world for the digest, by design. Selective by design — it culls marginal items (the AI section keeps real model releases/launches, not minor tooling posts) and stays quiet when quiet rather than padding. On-demand only; there is no schedule.",
       inputSchema: {
-        days: z.number().int().min(1).max(30).optional().describe("Recency window in days (default 4). Items older than this are dropped. Use 7 for 'last week', etc. Ignored when since_last_call is true."),
-        since_last_call: z
-          .boolean()
-          .optional()
-          .describe("If true, include only items NEW since the previous time this tool ran (uses a stored last-run timestamp), instead of a fixed `days` window — i.e. 'what's new since I last looked'. The first-ever call (no timestamp yet) falls back to `days`. Every run records its time, so back-to-back since_last_call runs show only the gap between them."),
+        days: z.number().int().min(1).max(30).optional().describe("Minimum recency window in days (default 4). This is a FLOOR: the digest always covers at least this many days, but automatically extends further back to your last run if that was longer ago (so returning after two weeks catches up the whole gap; running twice in an hour still shows ~4 days, not an empty digest). Set higher (e.g. 7) to widen the floor."),
         sections: z
           .array(z.enum(["ai", "macro", "industry"]))
           .optional()
@@ -426,7 +448,7 @@ export function registerNewsDigest(server: any, deps: SummarizeDeps & { z: typeo
         max_items: z.number().int().min(1).max(60).optional().describe("Global cap on items handed to the summarizer (default 18). Capped sections like 'industry' are kept whole; the rest share the remaining budget by recency."),
       },
     },
-    async ({ days, since_last_call, sections, email, max_items }: { days?: number; since_last_call?: boolean; sections?: string[]; email?: boolean; max_items?: number }) => {
+    async ({ days, sections, email, max_items }: { days?: number; sections?: string[]; email?: boolean; max_items?: number }) => {
       try {
         const secs = sections?.length ? sections : ["ai", "macro", "industry"];
         const sendMail = email ?? true;
@@ -434,25 +456,9 @@ export function registerNewsDigest(server: any, deps: SummarizeDeps & { z: typeo
         const now = Date.now();
         const dayWindow = days ?? 4;
 
-        // Resolve the recency window: explicit since_last_call uses the stored
-        // last-run time (falling back to `days` on the first-ever call); otherwise
-        // a fixed `days` window. windowLabel feeds both the prompt and the report.
-        let cutoffMs: number;
-        let windowLabel: string;
-        if (since_last_call) {
-          const last = loadState().last_call;
-          const lastMs = last ? new Date(last).getTime() : NaN;
-          if (last && !isNaN(lastMs)) {
-            cutoffMs = lastMs;
-            windowLabel = `since last call (${last.slice(0, 16).replace("T", " ")} UTC)`;
-          } else {
-            cutoffMs = now - dayWindow * 24 * 60 * 60 * 1000;
-            windowLabel = `last ${dayWindow} day(s) — no prior call recorded, so since_last_call fell back to days`;
-          }
-        } else {
-          cutoffMs = now - dayWindow * 24 * 60 * 60 * 1000;
-          windowLabel = `last ${dayWindow} day(s)`;
-        }
+        // Window = max(days-floor, time-since-last-run). windowLabel feeds both the
+        // summarizer prompt and the report header.
+        const { cutoffMs, windowLabel } = resolveWindow(now, dayWindow, loadState().last_call);
 
         const cfg = loadFeedsConfig();
         const { items, failed } = await fetchDigestItems(cfg, secs, cutoffMs, maxItems);

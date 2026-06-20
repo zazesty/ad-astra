@@ -113,20 +113,28 @@ you call tool -> fetch curated feeds (last N days) -> dedupe -> LLM COMPRESS -> 
   rebuild/restart. Adding a source = drop a `{source, url}` into a section. The
   curated list **is** the quality control — the summarizer has no web access, so a
   source not in `feeds.json` cannot enter the digest.
-- **Params:** `days` (default 4 — the recency window, e.g. 7 for "last week"),
-  `since_last_call` (bool — only items new since the previous run, via a stored
-  timestamp; falls back to `days` on the first-ever call), `sections` (default all),
-  `email` (default true), `max_items` (default 18). `industry` is hard-capped
-  (ambient awareness, not a dashboard); other sections share the remaining budget
-  by recency.
-- **Run-state:** `since_last_call` reads/writes `.news-digest-state.json` (repo
-  root, gitignored — operational state, not config). The timestamp advances on
-  every successful run.
+- **Params:** `days` (default 4), `sections` (default all), `email` (default true),
+  `max_items` (default 18). `industry` is hard-capped (ambient awareness, not a
+  dashboard); other sections share the remaining budget by recency.
+- **Recency window = max(`days`-floor, time-since-last-run).** `days` is a FLOOR:
+  every digest covers at least that many days, but auto-extends back to your last
+  run if that was longer ago — so returning after two weeks catches up the whole
+  gap, while running twice in an hour still shows ~4 days (never a near-empty
+  digest). Implemented in the pure `resolveWindow()`; the last-run timestamp lives
+  in `.news-digest-state.json` (repo root, gitignored — operational state, not
+  config) and advances on every successful run.
+- **Importance bar:** the summarizer is *selective*, not exhaustive — it culls
+  marginal items. The **AI/frontier** section is high-bar: it keeps real model
+  releases/launches, pricing/access changes, and significant research, and culls
+  minor tooling/library posts and blog musings.
 - **Feeds (`feeds.json`) — per-source `enabled: false`** keeps a source documented
-  without paying its fetch timeout. Used for **Michael Pettis** (mpettis.com is
-  IP-blocked from the box); **Brad Setser / Follow the Money** covers the same
-  balance-of-payments lens and is the active challenger in his place. G&R uses its
-  live `blog.gorozen.com` feed.
+  without paying its fetch timeout. Used for: **Michael Pettis** (mpettis.com
+  IP-blocked from the box — **Brad Setser / Follow the Money** is the active
+  same-lens challenger); and **xAI/Grok, DeepSeek, Moonshot/Kimi, Z.ai/GLM** (no
+  usable RSS — JS SPAs behind Cloudflare). Those labs' major releases are surfaced
+  via the Simon Willison curator feed + the HN keyword filter (which includes
+  grok/xai/deepseek/qwen/kimi/moonshot/glm); **Qwen** is the one major Chinese lab
+  with a real feed and is enabled. G&R uses its live `blog.gorozen.com` feed.
 - **Compress, don't amplify.** The system prompt forces ruthless dedup, 1–2 lines
   per item, no hype, and *quiet-when-quiet* (a slow week says so, never pads).
 - **Prior-challenging voices** (Wang, Pettis, Tooze) are flagged `challenger` in

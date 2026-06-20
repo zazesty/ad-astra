@@ -14,9 +14,14 @@
         { "source": "OpenAI", "url": "https://openai.com/news/rss.xml" },
         { "source": "Google AI", "url": "https://blog.google/technology/ai/rss/" },
         { "source": "Google DeepMind", "url": "https://deepmind.google/blog/rss.xml" },
+        { "source": "Qwen (Alibaba)", "url": "https://qwenlm.github.io/blog/index.xml", "note": "Official Qwen blog — the one major Chinese lab with a real RSS feed." },
         { "source": "Hugging Face", "url": "https://huggingface.co/blog/feed.xml" },
-        { "source": "Simon Willison", "url": "https://simonwillison.net/atom/everything/" },
-        { "source": "Hacker News (front page)", "url": "https://hnrss.org/frontpage", "keyword_filter": ["ai", "llm", "gpt", "claude", "anthropic", "openai", "gemini", "model", "deepseek", "kimi", "mistral", "llama", "agent", "inference", "transformer", "diffusion", "rag"] }
+        { "source": "Simon Willison", "url": "https://simonwillison.net/atom/everything/", "note": "High-signal curator; reliably flags major model releases incl. Grok + Chinese labs that have no RSS. Minor tooling posts are culled by the importance bar in the summarizer prompt." },
+        { "source": "Hacker News (front page)", "url": "https://hnrss.org/frontpage", "keyword_filter": ["ai", "llm", "gpt", "claude", "anthropic", "openai", "gemini", "model", "grok", "xai", "deepseek", "qwen", "kimi", "moonshot", "glm", "zhipu", "mistral", "llama", "agent", "inference", "transformer", "diffusion", "rag"] },
+        { "source": "xAI / Grok", "url": "https://x.ai/news", "enabled": false, "note": "DISABLED: no usable RSS (Cloudflare 403 on all feed paths; JS SPA). Major Grok releases surface via Simon Willison + the HN keyword filter (grok/xai), and you have grok_x_search for live xAI/X news. Re-enable if x.ai ever ships a feed. Do NOT substitute a Google-News feed — that's the algorithmic intermediation the digest exists to remove." },
+        { "source": "DeepSeek", "url": "https://www.deepseek.com/", "enabled": false, "note": "DISABLED: no RSS (SPA). Major releases surface via Willison + HN keyword filter (deepseek)." },
+        { "source": "Moonshot / Kimi", "url": "https://moonshotai.github.io/", "enabled": false, "note": "DISABLED: no RSS. Surfaced via Willison + HN keyword filter (kimi/moonshot)." },
+        { "source": "Z.ai / GLM (Zhipu)", "url": "https://z.ai/blog", "enabled": false, "note": "DISABLED: no RSS. Surfaced via Willison + HN keyword filter (glm/zhipu)." }
       ]
     },
     "macro": {
