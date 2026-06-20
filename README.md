@@ -13,6 +13,12 @@ transport per request.
 - **`grok_x_search`** — citations-first live X search (xAI `/responses` + `x_search`),
   with a no-results-is-an-error contract.
 - **`get_odds`** — live Polymarket + Kalshi prediction-market odds.
+- **`get_news_digest`** — on-demand, *compressed* read of a curated RSS feed list
+  (AI/frontier, macro/heterodox, light industry). Fetches the last N days, dedupes,
+  has the LLM **compress** (not amplify) into a short digest, emails it once (Resend)
+  and returns it inline. **Never web-searches** — the curated `feeds.json` is the
+  whole source list, by design. Quiet-when-quiet; on-demand only (no schedule). See
+  [News digest](#news-digest-get_news_digest) below.
 
 Plus the `lenses://frames` resource (analytical frames, live-read from `lenses.md`).
 
@@ -28,7 +34,7 @@ All config is via environment variables in `/etc/grok-mcp.env` (template:
 | `GEMINI_TRANSPORT` | `direct` (default) or `openrouter` — see below. |
 | `OPENROUTER_API_KEY` | Only needed when `GEMINI_TRANSPORT=openrouter`. |
 | `MCP_PATH` | Mount path(s). Treat as a credential. |
-| `RESEND_API_KEY`, `NOTIFY_EMAIL_TO` | Optional alert email. |
+| `RESEND_API_KEY`, `NOTIFY_EMAIL_TO` | Alert email (scripts) **and** `get_news_digest` delivery. `NOTIFY_EMAIL_FROM` optional. |
 
 ## Gemini transport: direct vs OpenRouter (BYOK)
 
@@ -93,6 +99,38 @@ Two unknowns were gated before flipping the default to `openrouter`:
 
 Note: OpenRouter's floating-alias API slug carries a literal `~` prefix
 (`~google/gemini-pro-latest`); the un-prefixed form returns HTTP 400.
+
+## News digest (`get_news_digest`)
+
+An on-demand primitive, not a cathedral: one tool, one pipeline, one config file.
+
+```
+you call tool -> fetch curated feeds (last N days) -> dedupe -> LLM COMPRESS -> email once + return inline
+```
+
+- **Config: `feeds.json`** (repo root) — sections (`ai`, `macro`, `industry`) and
+  their sources. **Live-read on every call** like `lenses.md`: edit + commit, no
+  rebuild/restart. Adding a source = drop a `{source, url}` into a section. The
+  curated list **is** the quality control — the summarizer has no web access, so a
+  source not in `feeds.json` cannot enter the digest.
+- **Params:** `days` (default 4), `sections` (default all), `email` (default true),
+  `max_items` (default 18). `industry` is hard-capped (ambient awareness, not a
+  dashboard); other sections share the remaining budget by recency.
+- **Compress, don't amplify.** The system prompt forces ruthless dedup, 1–2 lines
+  per item, no hype, and *quiet-when-quiet* (a slow week says so, never pads).
+- **Prior-challenging voices** (Wang, Pettis, Tooze) are flagged `challenger` in
+  `feeds.json` and the prompt forbids dropping them — a digest that only confirms
+  priors is the amplifying mirror in a nicer wrapper.
+- **Summarization reuses the existing cores:** Gemini (`callGemini`, same transport
+  as `ask_panel`) with a Grok fallback — **ungrounded** (`grounded:false`) always.
+- **Email** goes through Resend (same API as `scripts/notify-email.sh`) but
+  **fail-loud**: if the send fails the tool says so in the confirmation rather than
+  pretending it was delivered. Subject: `Digest — {date} ({n} items)`.
+- **Failed feeds are reported** in a digest footer (not silently swallowed) so a
+  dead required-voice URL gets noticed and can be swapped live in `feeds.json`.
+- **Upgrade path (deliberately absent in v1):** Hermes would own scheduling if you
+  ever flip to a push; a Kimi/DeepSeek swarm enters only if the job grows from
+  *summarizing a dozen items* into *wide gathering*. Until then: one call, on demand.
 
 ## Build / deploy
 

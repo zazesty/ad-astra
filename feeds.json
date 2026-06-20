@@ -1,0 +1,48 @@
+{
+  "_comment": "Curated feed list for get_news_digest. THIS FILE IS THE QUALITY CONTROL: the summarizer only compresses what these feeds contain — it never web-searches, so a source not listed here cannot enter the digest. Live-read on every call (like lenses.md): edit + commit, no rebuild/restart needed. Add a feed by dropping a {source,url} into the right section. Verify a new URL returns RSS/Atom before adding (curl it; look for <rss/<feed/<?xml).",
+  "_omitted": {
+    "anthropic.com/news": "No public RSS/Atom as of 2026-06. Big Anthropic releases reliably surface via Hacker News + Simon Willison; revisit if a feed appears or if a one-off index scraper is ever justified.",
+    "iea.org": "No working RSS endpoint found 2026-06. Energy/grid thread is carried by Doomberg + G&R for now."
+  },
+  "version": 1,
+  "sections": {
+    "ai": {
+      "title": "AI / frontier",
+      "cap": null,
+      "note": "The main course. Official model-maker sources first (least hype), then one or two curators. If you add aggregators, keep it to a couple — the curated list is the point, not breadth.",
+      "feeds": [
+        { "source": "OpenAI", "url": "https://openai.com/news/rss.xml" },
+        { "source": "Google AI", "url": "https://blog.google/technology/ai/rss/" },
+        { "source": "Google DeepMind", "url": "https://deepmind.google/blog/rss.xml" },
+        { "source": "Hugging Face", "url": "https://huggingface.co/blog/feed.xml" },
+        { "source": "Simon Willison", "url": "https://simonwillison.net/atom/everything/" },
+        { "source": "Hacker News (front page)", "url": "https://hnrss.org/frontpage", "keyword_filter": ["ai", "llm", "gpt", "claude", "anthropic", "openai", "gemini", "model", "deepseek", "kimi", "mistral", "llama", "agent", "inference", "transformer", "diffusion", "rag"] }
+      ]
+    },
+    "macro": {
+      "title": "Macro / finance / heterodox",
+      "cap": null,
+      "note": "The Lyn Alden tier PLUS the prior-challenging voices (Wang, Pettis, Tooze) which are REQUIRED, not optional — a feed that only confirms your priors is the amplifying mirror in a nicer wrapper. Keep them in even when they annoy you.",
+      "feeds": [
+        { "source": "Lyn Alden", "url": "https://www.lynalden.com/feed/" },
+        { "source": "Doomberg", "url": "https://doomberg.substack.com/feed" },
+        { "source": "Wolf Street", "url": "https://wolfstreet.com/feed/" },
+        { "source": "Construction Physics", "url": "https://www.construction-physics.com/feed" },
+        { "source": "Noahpinion", "url": "https://www.noahpinion.blog/feed" },
+        { "source": "Palladium", "url": "https://www.palladiummag.com/feed/" },
+        { "source": "Goehring & Rozencwajg", "url": "https://www.goehringrozencwajg.com/feed/", "note": "quarterly; low-frequency, big signal. May be unreachable from the box — swap URL here if it stays dead." },
+        { "source": "Joseph Wang / FedGuy", "url": "https://fedguy.com/feed/", "challenger": true },
+        { "source": "Michael Pettis", "url": "https://mpettis.com/feed/", "challenger": true, "note": "REQUIRED prior-challenger. If this feed stays dead in the failed-feeds report, find a live Pettis URL and swap it here — do not just drop him." },
+        { "source": "Adam Tooze / Chartbook", "url": "https://adamtooze.substack.com/feed", "challenger": true }
+      ]
+    },
+    "industry": {
+      "title": "Industry awareness",
+      "cap": 3,
+      "note": "LIGHT on purpose — ambient awareness, NOT a canary/dashboard. Hard cap enforced in the fetcher. Resist the urge to grow this section; if it needs tending it has overgrown its brief.",
+      "feeds": [
+        { "source": "Modern Machine Shop", "url": "https://www.mmsonline.com/rss/articles" }
+      ]
+    }
+  }
+}

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { getOdds } from "./oddsTool.js";
 import { registerGrokXSearch } from "./grokXSearch.js";
 import { registerAskPanel } from "./panel.js";
+import { registerNewsDigest } from "./newsDigest.js";
 import { loadLensesRaw } from "./lenses.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
@@ -54,6 +55,17 @@ function buildServer() {
     geminiApiKey: GEMINI_API_KEY,
     openrouterApiKey: OPENROUTER_API_KEY,
     geminiTransport: GEMINI_TRANSPORT,
+    xaiBaseUrl: XAI_BASE_URL,
+  });
+
+  // On-demand news digest. Reuses the same Gemini/Grok cores + transport as
+  // ask_panel; summarization is ungrounded by design (feeds.json is the source).
+  registerNewsDigest(server, {
+    z,
+    geminiApiKey: GEMINI_API_KEY,
+    openrouterApiKey: OPENROUTER_API_KEY,
+    geminiTransport: GEMINI_TRANSPORT,
+    xaiApiKey: XAI_API_KEY,
     xaiBaseUrl: XAI_BASE_URL,
   });
 
