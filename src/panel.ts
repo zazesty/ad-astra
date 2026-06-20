@@ -167,26 +167,40 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             ? callGeminiViaOpenRouter(opts.openrouterApiKey, spec.prompt, geminiOpts)
             : callGemini(geminiClient, spec.prompt, geminiOpts);
 
-        let r = await callGeminiOnce();
         // FAIL LOUD, not soft. Gemini grounding (googleSearch / engine:"native")
         // is model-discretion: the model decides whether to search, so a grounded
         // spec can come back weights-only with ZERO citations — a clean answer
         // indistinguishable from a real grounded one. That's the dangerous case
         // (e.g. the journaling routine then "answers" recent events from stale
-        // weights). So: when grounding was REQUESTED but no citations came back,
-        // retry once; if it's still ungrounded, throw rather than return the
-        // sourceless answer. ask_panel's allSettled turns this into ok:false with
-        // the message below, so the caller sees grounding_fired:false explicitly.
+        // weights). So when grounding was REQUESTED but no citations came back,
+        // retry; if still ungrounded after the budget, throw rather than return
+        // the sourceless answer. ask_panel's allSettled turns this into ok:false
+        // with the message below, so the caller sees grounding_fired:false.
         // (Mirrors grokCore's applyGroundingContract for the "required" contract.)
-        if (spec.grounded && r.citations.length === 0) {
+        //
+        // Budget = 2 retries (3 attempts). A/B test 2026-06-19 (n=50/arm): the
+        // openrouter(native) per-call miss rate is ~8% and independent, so 2
+        // retries drive the effective miss to ~0.08^3 ≈ 0.05% while keeping the
+        // ~2.5s happy path (only the ~8% that miss pay ~+2.5s each). The direct
+        // (AI Studio) transport misses 0% but is ~5x slower (p50 12.8s, p90 22s)
+        // AND had a 4% hard-500 rate — so retry-on-openrouter beats switching the
+        // default. Enforced grounding is NOT an option: AI Studio rejects
+        // google_search_retrieval on gemini-3.1-pro (the always-execute retrieval
+        // tool is Vertex-only), so both transports are inherently AUTO.
+        const MAX_GROUNDING_RETRIES = 2;
+        let r = await callGeminiOnce();
+        if (spec.grounded) {
           const label = spec.label ?? "gemini";
-          console.error(`[ask_panel] gemini grounded miss (0 citations) — retrying once. label=${label}`);
-          r = await callGeminiOnce();
+          for (let attempt = 1; attempt <= MAX_GROUNDING_RETRIES && r.citations.length === 0; attempt++) {
+            console.error(`[ask_panel] gemini grounded miss (0 citations) — retry ${attempt}/${MAX_GROUNDING_RETRIES}. label=${label}`);
+            r = await callGeminiOnce();
+          }
           if (r.citations.length === 0) {
             throw new Error(
-              "grounding_fired:false — Gemini grounded request returned zero citations after one " +
-                "retry. Refusing to pass back a weights-only answer as if it were grounded; the " +
-                "answer may be stale/hallucinated. Retry, rephrase to demand sources, or use a grok spec.",
+              `grounding_fired:false — Gemini grounded request returned zero citations after ` +
+                `${MAX_GROUNDING_RETRIES} retries. Refusing to pass back a weights-only answer as if ` +
+                `it were grounded; the answer may be stale/hallucinated. Retry, rephrase to demand ` +
+                `sources, or use a grok spec.`,
             );
           }
         }
