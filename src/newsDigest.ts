@@ -32,10 +32,16 @@ import { callGrok } from "./grokCore.js";
 import { sendEmail } from "./email.js";
 
 const FEEDS_PATH = new URL("../feeds.json", import.meta.url);
-// Tiny state file (repo root, gitignored): remembers the last run time so the
-// `since_last_call` window — "what's new since I last looked" — works. Operational
-// state, not config, so it's deliberately NOT committed.
-const STATE_PATH = new URL("../.news-digest-state.json", import.meta.url);
+// Tiny state file: remembers the last run time so the window can extend back to
+// the previous run (max(days-floor, since-last-run)). Operational state, not config.
+// On the box the systemd unit is hardened read-only (ProtectSystem=strict +
+// ReadOnlyPaths=/root/grok-mcp), so writing into the repo fails with EROFS; the
+// unit therefore sets StateDirectory=grok-mcp and we write to $STATE_DIRECTORY
+// (/var/lib/grok-mcp, persists across restarts). For local/dev runs (no
+// STATE_DIRECTORY) we fall back to the repo root (gitignored).
+const STATE_PATH: string | URL = process.env.STATE_DIRECTORY
+  ? `${process.env.STATE_DIRECTORY.replace(/\/+$/, "")}/news-digest-state.json`
+  : new URL("../.news-digest-state.json", import.meta.url);
 
 // Bound the summarizer prompt so one big fetch can't run up tokens. The model
 // dedupes anyway; this is just a ceiling on how much raw feed text we hand it.

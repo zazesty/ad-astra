@@ -120,9 +120,12 @@ you call tool -> fetch curated feeds (last N days) -> dedupe -> LLM COMPRESS -> 
   every digest covers at least that many days, but auto-extends back to your last
   run if that was longer ago — so returning after two weeks catches up the whole
   gap, while running twice in an hour still shows ~4 days (never a near-empty
-  digest). Implemented in the pure `resolveWindow()`; the last-run timestamp lives
-  in `.news-digest-state.json` (repo root, gitignored — operational state, not
-  config) and advances on every successful run.
+  digest). Implemented in the pure `resolveWindow()`; the last-run timestamp
+  advances on every successful run. It's stored at
+  `$STATE_DIRECTORY/news-digest-state.json` (`/var/lib/grok-mcp` on the box — the
+  unit sets `StateDirectory=grok-mcp` because the hardened service can't write into
+  the read-only repo), falling back to the gitignored `.news-digest-state.json` in
+  the repo root for local/dev runs.
 - **Importance bar:** the summarizer is *selective*, not exhaustive — it culls
   marginal items. The **AI/frontier** section is high-bar: it keeps real model
   releases/launches, pricing/access changes, and significant research, and culls
