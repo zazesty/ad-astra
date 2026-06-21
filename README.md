@@ -114,8 +114,16 @@ you call tool -> fetch curated feeds (last N days) -> dedupe -> LLM COMPRESS -> 
   curated list **is** the quality control — the summarizer has no web access, so a
   source not in `feeds.json` cannot enter the digest.
 - **Params:** `days` (default 4), `sections` (default all), `email` (default true),
-  `max_items` (default 18). `industry` is hard-capped (ambient awareness, not a
-  dashboard); other sections share the remaining budget by recency.
+  `max_items` (default 24). `industry` is hard-capped (ambient awareness, not a
+  dashboard); the rest (`ai`, `macro`) share the remaining budget by **fair
+  round-robin** — one newest item from each section per round — so the high-volume
+  AI feeds can't starve the lower-frequency macro section.
+- **Delivery (`email`):** `email:true` (default) emails the full digest to the
+  configured recipient (`NOTIFY_EMAIL_TO`) and returns **only a short confirmation**
+  (per-section counts + window + recipient) — the token-saving path, keeping the
+  digest out of the model context; on send failure it falls back to returning the
+  digest inline. `email:false` returns the full digest inline, no mail. Exactly one
+  email per call (no cross-call dedup).
 - **Recency window = max(`days`-floor, time-since-last-run).** `days` is a FLOOR:
   every digest covers at least that many days, but auto-extends back to your last
   run if that was longer ago — so returning after two weeks catches up the whole
@@ -126,18 +134,25 @@ you call tool -> fetch curated feeds (last N days) -> dedupe -> LLM COMPRESS -> 
   unit sets `StateDirectory=grok-mcp` because the hardened service can't write into
   the read-only repo), falling back to the gitignored `.news-digest-state.json` in
   the repo root for local/dev runs.
-- **Importance bar:** the summarizer is *selective*, not exhaustive — it culls
-  marginal items. The **AI/frontier** section is high-bar: it keeps real model
-  releases/launches, pricing/access changes, and significant research, and culls
-  minor tooling/library posts and blog musings.
+- **Importance bar (per-section):** the summarizer compresses, it doesn't gatekeep.
+  **AI/frontier** keeps model releases, new features, upcoming/announced releases,
+  pricing/access, significant research, AND the curated newsletters' roundups
+  (surfacing the standout items inside) — culling only true trivia (version bumps,
+  how-tos, self-promo). **Macro & industry** are *inclusive* — substantive
+  analysis/essays are kept even when not "breaking" (a Construction Physics deep-dive
+  is signal). Earlier the bar was too aggressive and culled good macro items; it's
+  now scoped to AI-only tightness.
 - **Feeds (`feeds.json`) — per-source `enabled: false`** keeps a source documented
-  without paying its fetch timeout. Used for: **Michael Pettis** (mpettis.com
-  IP-blocked from the box — **Brad Setser / Follow the Money** is the active
-  same-lens challenger); and **xAI/Grok, DeepSeek, Moonshot/Kimi, Z.ai/GLM** (no
-  usable RSS — JS SPAs behind Cloudflare). Those labs' major releases are surfaced
-  via the Simon Willison curator feed + the HN keyword filter (which includes
-  grok/xai/deepseek/qwen/kimi/moonshot/glm); **Qwen** is the one major Chinese lab
-  with a real feed and is enabled. G&R uses its live `blog.gorozen.com` feed.
+  without paying its fetch timeout. AI labs **with** a real feed: OpenAI, Google AI,
+  DeepMind, **Qwen**, Hugging Face. AI **curators/newsletters**: Simon Willison,
+  TLDR AI, AINews (smol.ai), Zvi, Interconnects, Import AI, Exponential View, ChinAI,
+  + keyword-filtered HN and MacRumors (Apple-AI). **No usable RSS → `enabled:false`
+  placeholders** (surfaced via the curators/HN keyword filter instead): xAI/Grok,
+  DeepSeek, Moonshot/Kimi, Z.ai/GLM, The Batch, Artificial Analysis. **No
+  Google-News-style feeds** — that reintroduces the algorithmic intermediation the
+  digest exists to remove. Macro: **Michael Pettis** is `enabled:false` (mpettis.com
+  IP-blocked) with **Brad Setser / Follow the Money** as the active same-lens
+  challenger; G&R uses its live `blog.gorozen.com` feed.
 - **Compress, don't amplify.** The system prompt forces ruthless dedup, 1–2 lines
   per item, no hype, and *quiet-when-quiet* (a slow week says so, never pads).
 - **Prior-challenging voices** (Wang, Pettis, Tooze) are flagged `challenger` in

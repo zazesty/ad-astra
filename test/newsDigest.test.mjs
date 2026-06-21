@@ -1,7 +1,7 @@
 // Pure unit tests for newsDigest — no network, no billed calls.
 // Run: node test/newsDigest.test.mjs   (also wired into `npm test`)
 import assert from "node:assert";
-import { dedupe, markdownToHtml, loadFeedsConfig, matchesKeywords, resolveWindow } from "../build/newsDigest.js";
+import { dedupe, markdownToHtml, loadFeedsConfig, matchesKeywords, resolveWindow, countDigestSections } from "../build/newsDigest.js";
 
 let pass = 0;
 const ok = (name) => { console.log(`ok - ${name}`); pass++; };
@@ -100,6 +100,28 @@ const ok = (name) => { console.log(`ok - ${name}`); pass++; };
   w = resolveWindow(now, 4, "not-a-date");
   assert.equal(w.cutoffMs, now - 4 * DAY, "unreadable timestamp falls back to floor");
   ok("resolveWindow = max(days-floor, since-last-run) with safe fallbacks");
+}
+
+// --- countDigestSections: per-section bullet counts for the confirmation -----
+{
+  const cfg = loadFeedsConfig();
+  const md = [
+    "5 items across 3 sections, last 4 days.",
+    "## AI / frontier",
+    "- [a](http://x) one",
+    "* [b](http://y) two",
+    "## Macro / finance / heterodox",
+    "- [c](http://z) three",
+    "## Industry awareness",
+    "(no items in window)",
+  ].join("\n");
+  const counts = countDigestSections(md, cfg, ["ai", "macro", "industry"]);
+  assert.equal(counts.ai, 2, "AI bullets (- and *) counted");
+  assert.equal(counts.macro, 1, "macro bullets counted");
+  assert.equal(counts.industry, 0, "industry heading present but no bullets => 0");
+  const none = countDigestSections("just prose, no headings", cfg, ["ai", "macro", "industry"]);
+  assert.equal(none.ai, null, "no matching headings => null so caller falls back to input counts");
+  ok("countDigestSections counts post-compress bullets per section; null on no-parse");
 }
 
 console.log(`\n${pass} passed`);

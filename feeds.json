@@ -17,11 +17,21 @@
         { "source": "Qwen (Alibaba)", "url": "https://qwenlm.github.io/blog/index.xml", "note": "Official Qwen blog — the one major Chinese lab with a real RSS feed." },
         { "source": "Hugging Face", "url": "https://huggingface.co/blog/feed.xml" },
         { "source": "Simon Willison", "url": "https://simonwillison.net/atom/everything/", "note": "High-signal curator; reliably flags major model releases incl. Grok + Chinese labs that have no RSS. Minor tooling posts are culled by the importance bar in the summarizer prompt." },
+        { "source": "TLDR AI", "url": "https://tldr.tech/api/rss/ai", "note": "Dense daily technical scan, low-promo." },
+        { "source": "AINews (Smol AI / swyx)", "url": "https://news.smol.ai/rss.xml", "note": "Twitter-replacement aggregator: the day's Discords/Reddits/X in one read. Roundup posts — the digest surfaces them as a pointer (headline+snippet), not per-story." },
+        { "source": "Zvi — Don't Worry About the Vase", "url": "https://thezvi.wordpress.com/feed/", "note": "Exhaustive weekly roundup (WordPress feed; richer than the Substack mirror)." },
+        { "source": "Interconnects (Nathan Lambert)", "url": "https://www.interconnects.ai/feed", "note": "Post-training/RL; disagrees with hype." },
+        { "source": "Import AI (Jack Clark)", "url": "https://jack-clark.net/feed/", "note": "Capabilities + policy (jack-clark.net feed; richer than the Substack mirror)." },
+        { "source": "Exponential View (Azeem Azhar)", "url": "https://www.exponentialview.co/feed", "note": "AI <-> energy/labor/geopolitics — cross-cuts the macro interests." },
+        { "source": "ChinAI (Jeff Ding)", "url": "https://chinai.substack.com/feed", "note": "Primary-source China AI ecosystem." },
+        { "source": "MacRumors (Apple AI)", "url": "https://feeds.macrumors.com/MacRumors-All", "keyword_filter": ["ai", "apple intelligence", "siri", "chatgpt", "llm", "gemini", "machine learning", "neural engine", "openai", "genai", "foundation model"], "note": "Apple is broad/consumer, so this is keyword-filtered to Apple-AI items (Apple Intelligence/Siri/AI silicon) — else it floods the AI section with iPhone-case rumors. Remove keyword_filter for full MacRumors." },
         { "source": "Hacker News (front page)", "url": "https://hnrss.org/frontpage", "keyword_filter": ["ai", "llm", "gpt", "claude", "anthropic", "openai", "gemini", "model", "grok", "xai", "deepseek", "qwen", "kimi", "moonshot", "glm", "zhipu", "mistral", "llama", "agent", "inference", "transformer", "diffusion", "rag"] },
         { "source": "xAI / Grok", "url": "https://x.ai/news", "enabled": false, "note": "DISABLED: no usable RSS (Cloudflare 403 on all feed paths; JS SPA). Major Grok releases surface via Simon Willison + the HN keyword filter (grok/xai), and you have grok_x_search for live xAI/X news. Re-enable if x.ai ever ships a feed. Do NOT substitute a Google-News feed — that's the algorithmic intermediation the digest exists to remove." },
         { "source": "DeepSeek", "url": "https://www.deepseek.com/", "enabled": false, "note": "DISABLED: no RSS (SPA). Major releases surface via Willison + HN keyword filter (deepseek)." },
         { "source": "Moonshot / Kimi", "url": "https://moonshotai.github.io/", "enabled": false, "note": "DISABLED: no RSS. Surfaced via Willison + HN keyword filter (kimi/moonshot)." },
-        { "source": "Z.ai / GLM (Zhipu)", "url": "https://z.ai/blog", "enabled": false, "note": "DISABLED: no RSS. Surfaced via Willison + HN keyword filter (glm/zhipu)." }
+        { "source": "Z.ai / GLM (Zhipu)", "url": "https://z.ai/blog", "enabled": false, "note": "DISABLED: no RSS. Surfaced via Willison + HN keyword filter (glm/zhipu)." },
+        { "source": "The Batch (Andrew Ng)", "url": "https://www.deeplearning.ai/the-batch/", "enabled": false, "note": "DISABLED: no working RSS path found 2026-06 (deeplearning.ai/the-batch/rss/ 404s). Re-enable with a real feed URL if one surfaces." },
+        { "source": "Artificial Analysis", "url": "https://artificialanalysis.ai/", "enabled": false, "note": "DISABLED: no blog RSS found (data/leaderboard site). Releases+pricing surface via TLDR/AINews/Willison for now." }
       ]
     },
     "macro": {

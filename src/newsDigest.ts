@@ -275,21 +275,38 @@ export async function fetchDigestItems(
     bySectionItems[key] = items;
   }
 
-  // Global budget: capped sections (e.g. industry=3) are kept whole; the rest
-  // share the remaining budget by global recency, so a busy AI week doesn't
-  // crowd out the macro challengers entirely but freshness still wins.
+  // Budget: capped sections (e.g. industry=3) are kept whole; the rest share the
+  // remaining budget by FAIR ROUND-ROBIN across sections (one newest item from
+  // each uncapped section per round, until budget is spent or all are drained).
+  // This is the key fix vs plain global-recency: a high-frequency section (AI,
+  // with many feeds) can no longer crowd out a lower-frequency one (macro) — each
+  // gets a fair turn, and a section that runs dry hands its slots to the others.
   const effectiveMax = Math.min(maxItems, MAX_ITEMS_HARD_CAP);
-  const capped: DigestItem[] = [];
-  const uncapped: DigestItem[] = [];
+  let cappedCount = 0;
+  const uncappedKeys: string[] = [];
   for (const key of sections) {
     const section = cfg.sections[key];
     if (!section) continue;
-    if (typeof section.cap === "number") capped.push(...bySectionItems[key]);
-    else uncapped.push(...bySectionItems[key]);
+    if (typeof section.cap === "number") cappedCount += bySectionItems[key].length;
+    else uncappedKeys.push(key);
   }
-  uncapped.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  const budgetForUncapped = Math.max(0, effectiveMax - capped.length);
-  const keptUncapped = new Set(uncapped.slice(0, budgetForUncapped));
+  let budgetForUncapped = Math.max(0, effectiveMax - cappedCount);
+  const keptUncapped = new Set<DigestItem>();
+  const ptr: Record<string, number> = {};
+  uncappedKeys.forEach((k) => (ptr[k] = 0));
+  let progress = true;
+  while (budgetForUncapped > 0 && progress) {
+    progress = false;
+    for (const k of uncappedKeys) {
+      const arr = bySectionItems[k]; // already sorted newest-first
+      if (ptr[k] < arr.length) {
+        keptUncapped.add(arr[ptr[k]++]);
+        budgetForUncapped--;
+        progress = true;
+        if (budgetForUncapped === 0) break;
+      }
+    }
+  }
 
   // Reassemble in requested section order, dropping uncapped items over budget.
   const items: DigestItem[] = [];
@@ -327,8 +344,9 @@ const COMPRESSION_SYSTEM = `You are a COMPRESSION LAYER, not a hype engine. You 
 Rules:
 - Group by the section headers given. Use "## " markdown headers exactly matching the section titles provided.
 - Dedupe RUTHLESSLY: if one release/event is covered by several items, that's ONE line with the single best link. Merge near-duplicates across sources.
-- IMPORTANCE BAR — be SELECTIVE, not exhaustive. The reader wants only what matters. It is BETTER to show 3 important items than 10 padded ones. Drop the marginal stuff; do not list an item just because it's in the feed.
-- AI/frontier section specifically — HIGH BAR. KEEP: new model releases/launches, major capability or product launches, pricing/access/limit changes, and genuinely significant research or benchmarks. CULL: minor tooling/library/plugin updates, incremental version bumps, personal-blog musings, "interesting link" or commentary posts, and niche how-tos — UNLESS they're genuinely major. When unsure, cut it. (Example calibration: a frontier model release stays; a new Datasette plugin or a blog post musing about an MCP pattern goes.)
+- SELECTIVITY IS PER-SECTION — different sections get different bars (below). The only universal cut is pure filler: contentless link-dumps and exact repeats.
+- AI/frontier — capture what the reader actually cares about: KEEP model releases, NEW FEATURES / capabilities, UPCOMING or announced/teased releases and roadmaps, pricing/access/limit changes, and significant research or benchmarks. ALSO KEEP substantive roundups/analysis from the curated newsletters in this feed set (AINews, TLDR AI, Zvi, Interconnects, Import AI, ChinAI, Exponential View, Simon Willison) — these are hand-picked high-signal sources, so treat their posts as signal and surface the key developments each reports (1-2 lines naming the standout items inside, not just "a roundup was posted"). CULL only genuine minutiae: minor tooling/library/plugin version bumps, how-to tutorials, and pure self-promo. Merge the same story across newsletters + primary sources into ONE line. Rule of thumb: lean toward INCLUSION here — the feeds are already curated; your job is to compress and dedupe them, not to gatekeep them.
+- Macro/finance/heterodox AND Industry — INCLUSIVE. Keep substantive analysis, essays, and data pieces even when they aren't "breaking news" — a thoughtful deep-dive (e.g. a Construction Physics piece on industrial/energy mechanics) is exactly the signal here, so keep it. Only drop true filler (contentless link roundups, duplicates). Do NOT apply the AI section's tighter bar to these.
 - 1–2 lines per item, plain and factual. NO breathless framing, NO "this changes everything", NO editorializing. Lead with what actually shipped or changed.
 - Keep each item's source link as a markdown link on the headline.
 - QUIET WHEN QUIET: if a section has little that clears the bar, say so in one short line (e.g. "Slow week — 2 items.") rather than padding. Do NOT invent or inflate. An empty-ish section is a valid, honest outcome.
@@ -434,6 +452,46 @@ export function markdownToHtml(md: string): string {
   return `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:680px;line-height:1.5">${out.join("\n")}</div>`;
 }
 
+/**
+ * Count items per section in the FINAL digest markdown (bullets under each
+ * section's "## <title>" heading), so the email:true confirmation reports what
+ * actually landed in the inbox — not the pre-compression input count. Returns a
+ * {sectionKey: count} map in the requested order. Robust: if no headings match
+ * (LLM deviated from the format) it returns nulls so the caller can fall back.
+ * Pure + exported for tests.
+ */
+export function countDigestSections(
+  markdown: string,
+  cfg: FeedsConfig,
+  sectionKeys: string[],
+): Record<string, number | null> {
+  const titleToKey: { title: string; key: string }[] = [];
+  for (const k of sectionKeys) {
+    const s = cfg.sections[k];
+    if (s) titleToKey.push({ title: s.title.toLowerCase(), key: k });
+  }
+  const counts: Record<string, number | null> = {};
+  for (const k of sectionKeys) counts[k] = null;
+  let cur: string | null = null;
+  let matchedAny = false;
+  for (const raw of markdown.split("\n")) {
+    const line = raw.trim();
+    const h = /^#{1,6}\s+(.*)$/.exec(line);
+    if (h) {
+      const t = h[1].toLowerCase();
+      cur = null;
+      for (const { title, key } of titleToKey) {
+        if (t.includes(title)) { cur = key; matchedAny = true; break; }
+      }
+      if (cur !== null && counts[cur] === null) counts[cur] = 0;
+      continue;
+    }
+    if (cur !== null && /^[-*]\s+/.test(line)) counts[cur] = (counts[cur] ?? 0) + 1;
+  }
+  if (!matchedAny) for (const k of sectionKeys) counts[k] = null; // no parse → all unknown
+  return counts;
+}
+
 // --- MCP tool registration --------------------------------------------------
 
 export function registerNewsDigest(server: any, deps: SummarizeDeps & { z: typeof import("zod").z }) {
@@ -443,22 +501,26 @@ export function registerNewsDigest(server: any, deps: SummarizeDeps & { z: typeo
     {
       title: "Get News Digest",
       description:
-        "On-demand, COMPRESSED read of a curated set of RSS feeds (AI/frontier, macro/finance heterodox, light industry) — built to replace compulsive feed-scrolling with one quiet scan. Fetches a recency window (default: at least the last 4 days, auto-extending back to your previous run if that was longer ago), dedupes, has an LLM compress (NOT amplify) into a short high-signal digest, emails it to you ONCE, and returns the same digest inline. It NEVER web-searches: the curated feed list is the whole world for the digest, by design. Selective by design — it culls marginal items (the AI section keeps real model releases/launches, not minor tooling posts) and stays quiet when quiet rather than padding. On-demand only; there is no schedule.",
+        "On-demand, COMPRESSED digest of a curated set of RSS feeds (AI/frontier, macro/finance heterodox, light industry), to replace compulsive feed-scrolling with one quiet scan in the inbox. Fetches a recency window (default: at least the last 4 days, auto-extending back to the previous run if that was longer ago), dedupes, and has an LLM compress (NOT amplify) the items into a short, high-signal digest. It NEVER web-searches — the curated feed list is the entire source set, by design; selective by design (it culls marginal items and stays quiet when quiet rather than padding). " +
+        "TWO DELIVERY MODES, set by `email`: " +
+        "(1) email:true (default) — the full digest is emailed to the configured recipient (the server's NOTIFY_EMAIL_TO address) and this tool returns ONLY a short confirmation (per-section counts, window, recipient). This is the token-saving path: the digest lands in the inbox, NOT in the model context. If the send fails, the full digest is returned inline instead so nothing is lost. " +
+        "(2) email:false — the full digest is returned inline and no email is sent. " +
+        "Sends exactly ONE email per call ('once' = one message per invocation); there is NO de-duplication across calls, so repeated calls with overlapping windows may resend the same items. On-demand only; there is no schedule. (Throughout, 'you'/'the previous run' refer to the configured user / that user's prior call.)",
       inputSchema: {
-        days: z.number().int().min(1).max(30).optional().describe("Minimum recency window in days (default 4). This is a FLOOR: the digest always covers at least this many days, but automatically extends further back to your last run if that was longer ago (so returning after two weeks catches up the whole gap; running twice in an hour still shows ~4 days, not an empty digest). Set higher (e.g. 7) to widen the floor."),
+        days: z.number().int().min(1).max(30).optional().describe("Minimum recency window in days (default 4). This is a FLOOR: the digest always covers at least this many days, but automatically extends further back to the previous run if that was longer ago (so returning after two weeks catches up the whole gap; running twice in an hour still shows ~4 days, not an empty digest). Set higher (e.g. 7) to widen the floor."),
         sections: z
           .array(z.enum(["ai", "macro", "industry"]))
           .optional()
           .describe("Which sections to include (default all: ai, macro, industry). 'industry' is intentionally light (capped)."),
-        email: z.boolean().optional().describe("Send the digest as an email (default true). false = return inline only, no mail."),
-        max_items: z.number().int().min(1).max(60).optional().describe("Global cap on items handed to the summarizer (default 18). Capped sections like 'industry' are kept whole; the rest share the remaining budget by recency."),
+        email: z.boolean().optional().describe("Delivery mode (default true). true = email the full digest to the configured recipient and return ONLY a short confirmation (token-saving: digest stays out of model context; on send failure it falls back to returning the digest inline). false = return the full digest inline and send no email."),
+        max_items: z.number().int().min(1).max(60).optional().describe("Global cap on items handed to the summarizer (default 24). Capped sections like 'industry' are kept whole; the rest (ai, macro) share the remaining budget by FAIR round-robin (so a high-volume section can't starve a quieter one). Raise for a fuller digest, lower for a tighter one."),
       },
     },
     async ({ days, sections, email, max_items }: { days?: number; sections?: string[]; email?: boolean; max_items?: number }) => {
       try {
         const secs = sections?.length ? sections : ["ai", "macro", "industry"];
         const sendMail = email ?? true;
-        const maxItems = max_items ?? 18;
+        const maxItems = max_items ?? 24;
         const now = Date.now();
         const dayWindow = days ?? 4;
 
@@ -479,31 +541,54 @@ export function registerNewsDigest(server: any, deps: SummarizeDeps & { z: typeo
         saveState({ last_call: new Date(now).toISOString() });
 
         const today = new Date().toISOString().slice(0, 10);
-        const subject = `Digest — ${today} (${items.length} item${items.length === 1 ? "" : "s"})`;
 
-        // Footer: surface failed feeds so a dead required-voice URL gets noticed
-        // (the whole point of reporting rather than silently swallowing).
-        let footer = "";
-        if (failed.length) {
-          footer =
-            "\n\n---\n_Feeds that failed this run (swap the URL in feeds.json if persistent):_\n" +
-            failed.map((f) => `- ${f.source} [${f.section}]: ${f.error}`).join("\n");
+        // Per-section counts of what actually landed in the digest (post-compress),
+        // for the email:true confirmation; fall back to input counts if the
+        // markdown didn't parse into the expected section headings.
+        const secCounts = countDigestSections(markdown, cfg, secs);
+        const finalCount: Record<string, number> = {};
+        let totalFinal = 0;
+        for (const k of secs) {
+          const c = secCounts[k] ?? items.filter((i) => i.section === k).length;
+          finalCount[k] = c;
+          totalFinal += c;
         }
-        const fullMd = markdown + footer;
+        const windowRange = `${new Date(cutoffMs).toISOString().slice(0, 10)}..${today}`;
+        const countsStr = secs.map((k) => `${k}: ${finalCount[k]}`).join(" / ");
+        const subject = `Digest — ${today} (${totalFinal} item${totalFinal === 1 ? "" : "s"})`;
 
-        let emailStatus: string;
+        // Failed-feed note (appended to the full digest, AND surfaced in the email
+        // confirmation so a dead feed is never silently hidden by email mode).
+        const failedNote = failed.length
+          ? "\n\n---\n_Feeds that failed this run (swap the URL in feeds.json if persistent):_\n" +
+            failed.map((f) => `- ${f.source} [${f.section}]: ${f.error}`).join("\n")
+          : "";
+        const fullMd = markdown + failedNote;
+        const failedTag = failed.length ? ` · ${failed.length} feed(s) failed` : "";
+
+        // Delivery contract:
+        //   email:true  -> full digest goes to the inbox; return ONLY a short
+        //     confirmation (the token-saving path — the digest does NOT enter the
+        //     model context). If the send FAILS, fall back to returning the full
+        //     digest inline so the content is never lost.
+        //   email:false -> full digest returned inline, no mail.
         if (sendMail) {
           try {
             const r = await sendEmail({ subject, text: fullMd, html: markdownToHtml(fullMd) });
-            emailStatus = `emailed ${items.length} item(s) to ${r.to}`;
+            const confirmation =
+              `${countsStr} — emailed to ${r.to}, window ${windowRange}${failedTag}. ` +
+              "(Full digest delivered to inbox; not returned inline, to save context.)";
+            return { content: [{ type: "text", text: confirmation }] };
           } catch (mailErr) {
-            emailStatus = `email FAILED (${(mailErr as Error).message}) — digest returned inline only`;
+            const header =
+              `email FAILED (${(mailErr as Error).message}) — returning the full digest inline so it isn't lost. ` +
+              `window=${windowLabel} sections=${secs.join(",")} engine=${engine}${failedTag}\n\n`;
+            return { content: [{ type: "text", text: header + fullMd }] };
           }
-        } else {
-          emailStatus = `email skipped (email:false) — ${items.length} item(s) inline only`;
         }
-
-        const header = `${emailStatus}. window=${windowLabel} sections=${secs.join(",")} engine=${engine}${failed.length ? ` failed_feeds=${failed.length}` : ""}\n\n`;
+        const header =
+          `email skipped (email:false) — full digest inline. ${countsStr}. ` +
+          `window=${windowLabel} sections=${secs.join(",")} engine=${engine}${failedTag}\n\n`;
         return { content: [{ type: "text", text: header + fullMd }] };
       } catch (err) {
         return { content: [{ type: "text", text: `get_news_digest failed: ${(err as Error).message}` }], isError: true };
