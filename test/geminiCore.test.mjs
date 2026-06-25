@@ -6,7 +6,7 @@
  *
  *   node test/geminiCore.test.mjs
  */
-import { extractOpenRouterResult, extractDirectCitations } from "../build/geminiCore.js";
+import { extractOpenRouterResult, extractDirectCitations, OpenRouterError, isTransientError } from "../build/geminiCore.js";
 
 let pass = 0;
 let fail = 0;
@@ -95,6 +95,20 @@ console.log("\nUnit: extractDirectCitations (@google/genai groundingMetadata)");
 // 8. Malformed/empty payload => empty, no throw.
 {
   check("direct malformed => empty", extractDirectCitations({}).length === 0 && extractDirectCitations(null).length === 0);
+}
+
+// 9. isTransientError — the gate every retry + OR→direct failover keys off.
+//    TRANSIENT (retry/fail-over): 429, 5xx, network (status undefined).
+//    NON-transient (propagate): 4xx client errors, and any non-OpenRouterError
+//    (e.g. a grounding_fired:false plain Error must NOT trigger provider failover).
+{
+  check("transient: 429", isTransientError(new OpenRouterError("rate", 429, true)) === true);
+  check("transient: 503", isTransientError(new OpenRouterError("down", 503, true)) === true);
+  check("transient: network (no status)", isTransientError(new OpenRouterError("net", undefined, true)) === true);
+  check("non-transient: 400", isTransientError(new OpenRouterError("bad req", 400, false)) === false);
+  check("non-transient: 401", isTransientError(new OpenRouterError("auth", 401, false)) === false);
+  check("non-transient: plain Error (grounding fail-loud)", isTransientError(new Error("grounding_fired:false")) === false);
+  check("non-transient: non-error value", isTransientError("nope") === false && isTransientError(undefined) === false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

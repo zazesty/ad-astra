@@ -70,15 +70,18 @@ export function applyLens(
 // SCHEMA (clients that don't surface the lenses://frames resource — e.g. the
 // Grok chatbot — still see the options). Single source of truth = lenses.md;
 // adding/renaming a lens updates this on restart.
+// Just the frame menu ("'name' — blurb; ..."), live from lenses.md. Shared by
+// every tool's lens param so the option list has one source of truth.
+export function buildLensMenu(): string {
+  return [...loadLenses().values()].map((l) => `'${l.name}' — ${l.blurb}`).join("; ");
+}
+
 export function buildLensParamDescription(): string {
-  const menu = [...loadLenses().values()]
-    .map((l) => `'${l.name}' — ${l.blurb}`)
-    .join("; ");
   return (
     "Analytical frame applied via the system prompt. OMIT to auto-apply the " +
     "'default' second-opinion frame (skipped if you pass a custom `system`); " +
     "pass 'none' to disable framing; or choose one: " +
-    menu +
+    buildLensMenu() +
     ". Composes with `system`: lens first, then your system text."
   );
 }

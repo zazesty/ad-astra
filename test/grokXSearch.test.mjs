@@ -89,6 +89,14 @@ console.log("Unit: applyGroundingContract");
 }
 
 // --- Integration: live MCP zod validation (free; rejected pre-fetch) ---
+// Needs the MCP server running at MCP_URL. Gated behind RUN_INTEGRATION so the
+// default `npm test` (unit-only, no server, no network) stays green; run this arm
+// with `npm run test:integration` against a live server.
+if (!process.env.RUN_INTEGRATION) {
+  console.log("Integration: SKIPPED (set RUN_INTEGRATION=1 with the server running)");
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+}
 console.log("Integration: live MCP zod validation");
 
 async function callTool(name, args) {

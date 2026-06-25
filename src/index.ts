@@ -6,6 +6,7 @@ import { getOdds } from "./oddsTool.js";
 import { registerGrokXSearch } from "./grokXSearch.js";
 import { registerAskPanel } from "./panel.js";
 import { registerNewsDigest } from "./newsDigest.js";
+import { registerAskOracle } from "./oracleEngine.js";
 import { loadLensesRaw } from "./lenses.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
@@ -66,6 +67,15 @@ function buildServer() {
     openrouterApiKey: OPENROUTER_API_KEY,
     geminiTransport: GEMINI_TRANSPORT,
     xaiApiKey: XAI_API_KEY,
+    xaiBaseUrl: XAI_BASE_URL,
+  });
+
+  // Auto-routing front door (classify → route → fan out → assemble). Ships beside
+  // ask_panel on the same URL; reuses the same Grok-direct + OpenRouter cores.
+  registerAskOracle(server, {
+    xaiApiKey: XAI_API_KEY,
+    geminiApiKey: GEMINI_API_KEY,
+    openrouterApiKey: OPENROUTER_API_KEY,
     xaiBaseUrl: XAI_BASE_URL,
   });
 
