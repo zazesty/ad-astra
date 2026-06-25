@@ -263,12 +263,19 @@ const SLOT_TIMEOUT_MS = 40_000; // plain reasoning seats
 // 2026-06-24 while reasoning seats finished) — and a dropped capability seat is the
 // one we LEAST want to lose. Give them a wider budget that fits the retry chain.
 const CAPABILITY_SLOT_TIMEOUT_MS = 60_000;
-const MAX_GROUNDING_RETRIES = 2; // mirrors ask_panel's gemini fail-loud budget
-// All seats retry ONCE on a timeout (owner pick: max resilience over bounded tail).
-// Worst case a seat's wall-clock doubles (~80s reasoning / ~120s capability), but
-// seats are concurrent so this raises tail latency, not summed latency. Only
-// TIMEOUTS retry here — transient HTTP/network already retried inside callOpenRouter,
-// and the OR→direct failover already fired, so a non-timeout error is terminal.
+// 1 retry (= 2 grounded calls). ask_panel uses 2, but oracle differs deliberately:
+// (a) a 3-call chain at high effort can stall past the 60s capability budget (a single
+// slow grounded call → seat timeout, see Grok find 2026-06-25), and (b) oracle has the
+// ungrounded SALVAGE net as a backstop that ask_panel lacks, so it can afford fewer
+// loud-fail retries. Residual silent-miss rate ≈ 8%² ≈ 0.6% — acceptable with salvage.
+const MAX_GROUNDING_RETRIES = 1;
+// REASONING seats retry ONCE on a timeout (capability seats do NOT — see executeSlots:
+// re-running their internal retry chain doubles latency and starves salvage). A
+// reasoning seat is a single cheap call, so a timeout there is likely a transient
+// stall worth one retry; worst case its wall-clock doubles (~80s) but seats are
+// concurrent so this raises tail, not sum. Only TIMEOUTS retry — transient HTTP/network
+// already retried inside callOpenRouter and OR→direct already fired, so other errors
+// are terminal.
 const MAX_TIMEOUT_RETRIES = 1;
 
 const isCapabilitySeat = (s: Seat): boolean => !!s.grok_grounding || !!s.grounded;
@@ -430,9 +437,18 @@ async function executeSlots(
   callerSystem?: string,
 ): Promise<SlotResult[]> {
   return mapLimit(seats, CONCURRENCY, async (s) => {
-    const timeoutMs = isCapabilitySeat(s) ? CAPABILITY_SLOT_TIMEOUT_MS : SLOT_TIMEOUT_MS;
+    const capability = isCapabilitySeat(s);
+    const timeoutMs = capability ? CAPABILITY_SLOT_TIMEOUT_MS : SLOT_TIMEOUT_MS;
+    // Timeout-retry applies to REASONING seats only. A capability seat already runs
+    // an internal retry chain inside a long (60s) budget, so a SEAT timeout means a
+    // single grounded/x call genuinely stalled — re-running the whole chain just
+    // doubles latency (lone grounded seat → 2×60s) and STARVES the salvage net past
+    // the client's patience. Caught by Grok 2026-06-25 (force_grounding+n:1 on a
+    // non-retrievable prompt timed out the whole call instead of degrading). Capability
+    // seats now time out once, fail, and hand off to salvage fast.
+    const maxAttempts = capability ? 0 : MAX_TIMEOUT_RETRIES;
     let lastMsg = "";
-    for (let attempt = 0; attempt <= MAX_TIMEOUT_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= maxAttempts; attempt++) {
       try {
         const r = await withTimeout(dispatchSeat(deps, prompt, s, callerSystem), timeoutMs, s.id);
         return { seat: s, status: "ok" as const, text: r.text, citations: r.citations };
@@ -440,11 +456,11 @@ async function executeSlots(
         const msg = (e as Error)?.message ?? String(e);
         lastMsg = msg;
         const timedOut = /timed out/i.test(msg);
-        // Retry ONLY timeouts (all seats). A non-timeout error is terminal: the
-        // in-call transient retry + OR→direct failover already had their shot, and a
-        // grounding_fired:false is a designed fail-loud, not something to re-run.
-        if (timedOut && attempt < MAX_TIMEOUT_RETRIES) {
-          console.error(`[ask_oracle] seat ${s.id} timed out (${timeoutMs}ms) — timeout retry ${attempt + 1}/${MAX_TIMEOUT_RETRIES}`);
+        // Retry ONLY timeouts, and only on reasoning seats. A non-timeout error is
+        // terminal: the in-call transient retry + OR→direct failover already had their
+        // shot, and grounding_fired:false is a designed fail-loud, not a re-run.
+        if (timedOut && attempt < maxAttempts) {
+          console.error(`[ask_oracle] seat ${s.id} timed out (${timeoutMs}ms) — timeout retry ${attempt + 1}/${maxAttempts}`);
           continue;
         }
         return { seat: s, status: timedOut ? ("timeout" as const) : ("error" as const), error: msg };
@@ -573,7 +589,11 @@ export async function runOracle(
       provider: "openrouter",
       model_slug: GEMINI_PRO_SLUG,
       lens: seats[0]?.lens ?? "default",
-      reasoning_effort: seats[0]?.reasoning_effort ?? "high",
+      // Salvage is best-effort last-ditch recovery on an already-failed (often
+      // already-slow) route — cap it at medium so it returns FAST rather than adding
+      // another ~20s of high-effort thinking on top of the failures it's rescuing
+      // (capEffort never RAISES a lower route effort).
+      reasoning_effort: capEffort(seats[0]?.reasoning_effort ?? "high", "medium"),
     };
     try {
       const r = await withTimeout(dispatchSeat(deps, prompt, salvageSeat, ov.system), SLOT_TIMEOUT_MS, salvageSeat.id);
