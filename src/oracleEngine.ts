@@ -120,8 +120,11 @@ export function capEffort(effort: Effort, max?: Effort): Effort {
 // gemini-model-check monitor covers oracle's seats too.
 const GEMINI_PRO_SLUG = DEFAULT_OPENROUTER_GEMINI_MODEL;
 // Pinned OpenAI flagship (verified in the OR catalog 2026-06-26) — the
-// non-Google, non-Grok cross-family dissenting voice for Grok-caller panels.
-// Pinned (not `~openai/gpt-latest`) so a named seat is a known, stable model.
+// non-Google, non-Grok cross-family dissenting voice. Promoted to the #3 slot
+// in BOTH pools on 2026-06-26 (owner call): a Claude-caller panel of 1/2/3/4
+// seats seats gemini → grok → gpt → openrouter/auto, so escalating to a panel
+// buys three genuine cross-family voices before reaching the wildcard. Pinned
+// (not `~openai/gpt-latest`) so a named seat is a known, stable model.
 const GPT_SLUG = "openai/gpt-5.5";
 // Single-seat default: at n=1 diversity is meaningless, so the cheap/fast wildcard
 // leads. `openrouter/auto` lets OR pick per-prompt.
@@ -146,14 +149,27 @@ const DEFAULT_REASONING_POOL = ["openrouter/auto", GEMINI_PRO_SLUG];
  * grounded-gemini seat) are NOT re-seated first — only the MISSING families lead,
  * so a 2-seat panel comes back cross-family by construction. The tail repeats the
  * named families so large panels keep cycling real models, not stacked `auto`.
+ *
+ * Fill order (2026-06-26 owner call): gemini → grok → gpt → openrouter/auto, then
+ * cycle the three named families. `auto` is the OVERFLOW wildcard — used only
+ * once each distinct family (gemini, grok, gpt) already has a seat — so a 3-seat
+ * Claude-caller panel seats three genuine cross-family voices, not two + a wildcard
+ * that lately lands on Gemini anyway. The head is deduped against capability/forced
+ * seats the same way (haveGrok/haveGemini above); haveGpt mirrors it.
  */
 function panelFillPool(existing: Seat[]): string[] {
   const haveGrok = existing.some((s) => s.provider === "grok-direct");
   const haveGemini = existing.some((s) => s.provider === "openrouter" && /gemini/i.test(s.model_slug));
+  const haveGpt = existing.some((s) => s.provider === "openrouter" && /gpt/i.test(s.model_slug));
   const head: string[] = [];
-  if (!haveGrok) head.push("grok"); // the contrarian cross-family voice (grok-direct, grounding off)
+  // Gemini leads: it's the family most likely already seated by a capability seat
+  // (gemini-grounded), so a 2-seat panel then pairs it with the grok contrarian.
   if (!haveGemini) head.push(GEMINI_PRO_SLUG);
-  return [...head, "openrouter/auto", GEMINI_PRO_SLUG, "grok"];
+  if (!haveGrok) head.push("grok"); // the contrarian cross-family voice (grok-direct, grounding off)
+  if (!haveGpt) head.push(GPT_SLUG);
+  // Tail: auto as the first overflow wildcard, then cycle the three named families
+  // so larger panels keep stacking real cross-family voices, not repeated `auto`.
+  return [...head, "openrouter/auto", GEMINI_PRO_SLUG, "grok", GPT_SLUG];
 }
 
 /**

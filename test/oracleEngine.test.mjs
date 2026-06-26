@@ -64,17 +64,31 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(s.some((x) => x.provider === "openrouter" && /gemini/i.test(x.model_slug)), "default panel includes a gemini seat (cross-family)");
 }
 {
+  // auto reappears only as OVERFLOW once ALL three families (gemini, grok, gpt) are seated
+  const s = buildSlots(C({ suggested_panel_n: 4 }), {});
+  ok(s.length === 4, "panel_n=4 → 4 seats");
+  ok(s[3].model_slug === "openrouter/auto", "auto returns as the 4th overflow seat once gemini+grok+gpt are seated");
+  const families = new Set(s.slice(0, 3).map((x) => (x.provider === "grok-direct" ? "grok" : /gemini/i.test(x.model_slug) ? "gemini" : "gpt")));
+  ok(families.size === 3, "first 3 seats span three distinct families before the wildcard");
+}
+
+{
   // the exact failing case: a default 2-seat panel must be cross-family, no auto
   const s = buildSlots(C({ suggested_panel_n: 2 }), {});
   ok(s.length === 2, "panel_n=2 → 2 seats");
   const families = new Set(s.map((x) => (x.provider === "grok-direct" ? "grok" : /gemini/i.test(x.model_slug) ? "gemini" : x.model_slug)));
-  ok(families.size === 2, "default 2-seat panel spans two families (grok + gemini), not a monoculture");
+  ok(families.size === 2, "default 2-seat panel spans two families (gemini + grok), not a monoculture");
   ok(!s.some((x) => x.model_slug === "openrouter/auto"), "auto NOT used at n=2 — diversity slots fill first");
 }
 {
-  // auto reappears only as OVERFLOW once both families are seated
+  // 3-seat Claude-caller panel: gemini → grok → gpt (three genuine cross-family
+  // voices). auto is demoted to the 4th/overflow slot (was 3rd pre-2026-06-26).
   const s = buildSlots(C({ suggested_panel_n: 3 }), {});
-  ok(s.some((x) => x.model_slug === "openrouter/auto"), "auto returns as the 3rd overflow seat once grok+gemini are seated");
+  ok(s.length === 3, "panel_n=3 → 3 seats");
+  ok(/gemini/i.test(s[0].model_slug), "default 3-seat: gemini leads (head slot 0)");
+  ok(s[1].provider === "grok-direct", "default 3-seat: grok contrarian second (head slot 1)");
+  ok(/gpt/i.test(s[2].model_slug), "default 3-seat: gpt is the 3rd cross-family voice (head slot 2, NEW 2026-06-26)");
+  ok(!s.some((x) => x.model_slug === "openrouter/auto"), "auto NOT used at n=3 — three families fill before the wildcard");
 }
 {
   // a grok capability seat already covers the grok family → filler adds gemini, not a 2nd grok
