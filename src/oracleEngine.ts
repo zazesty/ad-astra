@@ -47,8 +47,6 @@ export interface OracleDeps {
 // Overrides (§7). `specs` (the deterministic ask_panel bypass) is handled one
 // layer up at tool registration — it never reaches the engine.
 export interface OracleOverrides {
-  model_slugs?: string[];   // RESTRICT the reasoning pool (does not add seats)
-  force_model?: string;     // ADD one guaranteed reasoning seat
   n?: number;               // force seat count (still floored by capability seats)
   lens?: string;            // force lens
   system?: string;          // system instruction applied to every seat (composes w/ lens)
@@ -121,8 +119,9 @@ export function capEffort(effort: Effort, max?: Effort): Effort {
 const GEMINI_PRO_SLUG = DEFAULT_OPENROUTER_GEMINI_MODEL;
 // Pinned OpenAI flagship (verified in the OR catalog 2026-06-26) — the
 // non-Google, non-Grok cross-family dissenting voice. Promoted to the #3 slot
-// in BOTH pools on 2026-06-26 (owner call): a Claude-caller panel of 1/2/3/4
-// seats seats gemini → grok → gpt → openrouter/auto, so escalating to a panel
+// in BOTH pools on 2026-06-26 (owner call): a Claude-caller panel of 2/3/4
+// seats seats gemini → grok → gpt → openrouter/auto (n=1 keeps the plain auto-led
+// wildcard), so escalating to a panel
 // buys three genuine cross-family voices before reaching the wildcard. Pinned
 // (not `~openai/gpt-latest`) so a named seat is a known, stable model.
 const GPT_SLUG = "openai/gpt-5.5";
@@ -198,9 +197,10 @@ function grokCallerPool(existing: Seat[]): string[] {
   return [...head, "openrouter/auto", GEMINI_PRO_SLUG, GPT_SLUG];
 }
 
-// An EXPLICIT grok slug (force_model / model_slugs) → a grok-DIRECT reasoning seat
-// (grounding off), per §0. `openrouter/auto` may itself surface Grok via OR — that
-// stays an OR seat (low-stakes wildcard). So "grok"/"x-ai/grok-*" are direct here.
+// A grok slug in the reasoning pool (the literal "grok" diversity seat) → a
+// grok-DIRECT reasoning seat (grounding off), per §0. `openrouter/auto` may itself
+// surface Grok via OR — that stays an OR seat (low-stakes wildcard). So "grok"/
+// "x-ai/grok-*" are direct here.
 function isGrokSlug(slug: string): boolean {
   return slug !== "openrouter/auto" && /grok/i.test(slug);
 }
@@ -239,23 +239,18 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   if (c.needs_grounding || ov.force_grounding) {
     seats.push({ id: "gemini-grounded", provider: "openrouter", model_slug: GEMINI_PRO_SLUG, lens, reasoning_effort: effort, grounded: true });
   }
-  // explicit single-model force (e.g. "use Grok specifically")
-  if (ov.force_model) {
-    seats.push(reasoningSeat(ov.force_model, seats.length, lens, effort));
-  }
-
   // seat count = max(requested, #capability seats, 1) — capabilities win
   const want = ov.n ?? c.suggested_panel_n ?? 1;
   const target = Math.max(want, seats.length, 1);
-  // Reasoning-pool fill. If the caller RESTRICTS the pool (model_slugs) we honor it
-  // verbatim — explicit intent overrides diversity. Otherwise: a Grok CALLER
-  // (exclude_family:"grok") gets the no-grok cross-family order on ANY size (even
-  // n=1 wants gemini, not a wildcard that could lean wrong); a non-Grok caller's
-  // panel (target>=2) gets the diversity-first order (grok contrarian + gemini,
-  // auto as overflow); a single seat keeps the plain wildcard default.
-  const pool = ov.model_slugs
-    ?? (ov.exclude_family === "grok" ? grokCallerPool(seats)
-        : target >= 2 ? panelFillPool(seats) : DEFAULT_REASONING_POOL);
+  // Reasoning-pool fill — purely AUTO, no hand-pick (naming exact models is
+  // ask_panel's job, by design). A Grok CALLER (exclude_family:"grok") gets the
+  // no-grok cross-family order on ANY size (even n=1 wants gemini, not a wildcard
+  // that could lean wrong); a non-Grok caller's panel (target>=2) gets the
+  // diversity-first order (grok contrarian + gemini, auto as overflow); a single
+  // seat keeps the plain wildcard default.
+  const pool =
+    ov.exclude_family === "grok" ? grokCallerPool(seats)
+      : target >= 2 ? panelFillPool(seats) : DEFAULT_REASONING_POOL;
   let i = 0;
   while (seats.length < target) {
     seats.push(reasoningSeat(pool[i++ % pool.length], seats.length, lens, effort));
@@ -713,8 +708,11 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         "how hard to think. Returns a legible `route` object (which models ran, lens/effort, capabilities " +
         "fired, who decided + why), `slots_status`, a `degraded` flag, and either `raw` labeled answers " +
         "(DEFAULT — YOU synthesize) or a single `answer` when synthesize=true (for headless callers). " +
-        "Use ask_panel when you want to hand-pick the exact models/specs; use ask_oracle when you want it " +
-        "decided for you. All overrides are optional and supersede the classifier.",
+        "ask_oracle keeps NO model hand-pick knobs by design — describe the question and it picks the panel " +
+        "for you. To name the exact model per seat, or set per-member grounding/temperature/lens, use " +
+        "ask_panel (those are its job, not overrides here). The remaining overrides are all auto-routing " +
+        "assistance (capabilities, effort, lens, panel size, caller-family exclusion) and are optional, " +
+        "superseding the classifier.",
       inputSchema: {
         prompt: z
           .string()
@@ -753,14 +751,6 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
           .enum(["low", "medium", "high"])
           .optional()
           .describe("Ceiling on the CLASSIFIER's effort pick — it may choose lower, never higher. Does NOT cap an explicit reasoning_effort (that wins)."),
-        model_slugs: z
-          .array(z.string())
-          .optional()
-          .describe("RESTRICT the reasoning-seat pool the classifier draws from to these slugs (does NOT add seats; capability seats are unaffected). Slugs are OpenRouter model IDs — e.g. 'openrouter/auto', '~google/gemini-pro-latest'; a grok slug ('x-ai/grok-4.3') is routed DIRECT to xAI."),
-        force_model: z
-          .string()
-          .optional()
-          .describe("ADD one guaranteed reasoning seat for this exact model (use when you want a specific model in the panel). Same slug space as model_slugs: an OpenRouter model ID, or a grok slug ('x-ai/grok-4.3') which routes direct to xAI."),
         force_x: z
           .boolean()
           .optional()
@@ -783,8 +773,6 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
       lens?: string;
       reasoning_effort?: Effort;
       max_effort?: Effort;
-      model_slugs?: string[];
-      force_model?: string;
       force_x?: boolean;
       force_grounding?: boolean;
       exclude_family?: string;
@@ -797,8 +785,6 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
           lens: args.lens,
           reasoning_effort: args.reasoning_effort,
           max_effort: args.max_effort,
-          model_slugs: args.model_slugs,
-          force_model: args.force_model,
           force_x: args.force_x,
           force_grounding: args.force_grounding,
           exclude_family: args.exclude_family,

@@ -97,11 +97,6 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(s.some((x) => x.provider === "openrouter" && /gemini/i.test(x.model_slug)), "missing gemini family is the one seeded next (no redundant 2nd grok)");
 }
 {
-  // caller-restricted pool is honored verbatim — diversity injection does NOT fire
-  const s = buildSlots(C({ suggested_panel_n: 2 }), { model_slugs: ["~google/gemini-pro-latest"] });
-  ok(s.every((x) => x.model_slug === "~google/gemini-pro-latest"), "model_slugs restriction overrides diversity (explicit caller intent wins)");
-}
-{
   // GROK CALLER (exclude_family:"grok"): the contrarian grok-direct seat is DROPPED
   // (Grok can't be its own dissenting voice) and replaced by gemini → gpt → auto.
   const s1 = buildSlots(C({ suggested_panel_n: 1 }), { exclude_family: "grok" });
@@ -152,14 +147,6 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
 {
   const s = buildSlots(C(), { force_x: true, force_grounding: true });
   ok(s.some((x) => x.id === "grok-x") && s.some((x) => x.id === "gemini-grounded"), "force_x + force_grounding add both seats");
-}
-{
-  const s = buildSlots(C({ suggested_panel_n: 2 }), { model_slugs: ["google/gemini-3.1-pro"] });
-  ok(s.every((x) => x.model_slug === "google/gemini-3.1-pro"), "model_slugs pins the reasoning pool");
-}
-{
-  const s = buildSlots(C(), { force_model: "x-ai/grok-4.3" });
-  ok(s.some((x) => x.provider === "grok-direct" && !x.grok_grounding), "force_model grok → grok-direct reasoning seat (grounding off)");
 }
 {
   const s = buildSlots(C(), { lens: "austrian" });

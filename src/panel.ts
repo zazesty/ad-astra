@@ -116,8 +116,10 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         "Grok or Gemini one question). Use multiple specs for a second opinion / contrarian check / " +
         "cross-model panel — e.g. one Grok + one Gemini, or the same model at two temperatures. " +
         "Each spec independently picks the backend ('grok'|'gemini'), whether to ground on live web " +
-        "search, a lens, etc. Results come back in input order, each tagged with its label and an " +
-        "ok flag; one spec failing does NOT fail the others. This tool gathers — it does not judge; " +
+        "search, a lens, and a temperature. Results come back in input order, each tagged with its label and an " +
+        "ok flag; one spec failing does NOT fail the others. This is the HAND-PICK tool — you name the exact " +
+        "members (model + prompt + grounding + lens + temperature each); ask_oracle is the auto-routing " +
+        "counterpart that picks the panel for you. This tool gathers — it does not judge; " +
         "synthesis is your job. (For a citations-first live X search with a no-results-is-an-error " +
         "contract, use grok_x_search instead.)",
       inputSchema: {
