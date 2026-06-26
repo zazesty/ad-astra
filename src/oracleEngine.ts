@@ -57,6 +57,7 @@ export interface OracleOverrides {
   force_x?: boolean;        // force a direct-Grok x_search seat
   force_grounding?: boolean; // force a grounded-Gemini seat (Google-native via OR)
   synthesize?: boolean;     // true → merge into one answer (headless callers); default raw
+  exclude_family?: string;  // "grok" → drop same-family REASONING seats (Grok-caller case; see grokCallerPool)
 }
 
 export type SeatProvider = "grok-direct" | "openrouter";
@@ -118,6 +119,10 @@ export function capEffort(effort: Effort, max?: Effort): Effort {
 // live 2026-06-24). Single source of truth = geminiCore's export, so the
 // gemini-model-check monitor covers oracle's seats too.
 const GEMINI_PRO_SLUG = DEFAULT_OPENROUTER_GEMINI_MODEL;
+// Pinned OpenAI flagship (verified in the OR catalog 2026-06-26) — the
+// non-Google, non-Grok cross-family dissenting voice for Grok-caller panels.
+// Pinned (not `~openai/gpt-latest`) so a named seat is a known, stable model.
+const GPT_SLUG = "openai/gpt-5.5";
 // Single-seat default: at n=1 diversity is meaningless, so the cheap/fast wildcard
 // leads. `openrouter/auto` lets OR pick per-prompt.
 const DEFAULT_REASONING_POOL = ["openrouter/auto", GEMINI_PRO_SLUG];
@@ -149,6 +154,32 @@ function panelFillPool(existing: Seat[]): string[] {
   if (!haveGrok) head.push("grok"); // the contrarian cross-family voice (grok-direct, grounding off)
   if (!haveGemini) head.push(GEMINI_PRO_SLUG);
   return [...head, "openrouter/auto", GEMINI_PRO_SLUG, "grok"];
+}
+
+/**
+ * Diversity-first fill order for a GROK-CALLER panel (exclude_family:"grok"). The
+ * default `panelFillPool` seats a grok-direct contrarian voice — correct when the
+ * caller is Claude, but when the CALLER is Grok that's a second Grok voice
+ * consulting itself (goofy), and it's also the slow high-effort seat from fix A
+ * (2026-06-26). So we drop it and seat genuine cross-family dissent instead:
+ *
+ *   1 seat → gemini · 2 → gemini, gpt · 3 → gemini, gpt, auto · 4+ → cycled, no grok
+ *
+ * `openrouter/auto` is demoted to the 3rd/overflow voice (family-agnostic; the
+ * 2026-06-24 probe found it never surfaces Grok, so it's safe here). Capability
+ * seats are EXEMPT and stay seated by `buildSlots` before this runs — a grok-x seat
+ * is data retrieval (live X search), NOT Grok's opinion, so it is NOT "same-family
+ * reasoning" and is correctly left in place. Families already seated by capability
+ * seats are deduped from the head (mirrors panelFillPool's philosophy).
+ */
+function grokCallerPool(existing: Seat[]): string[] {
+  const haveGemini = existing.some((s) => s.provider === "openrouter" && /gemini/i.test(s.model_slug));
+  const haveGpt = existing.some((s) => /gpt/i.test(s.model_slug));
+  const head: string[] = [];
+  if (!haveGemini) head.push(GEMINI_PRO_SLUG);
+  if (!haveGpt) head.push(GPT_SLUG);
+  // Tail cycles real models then auto as overflow — NEVER grok.
+  return [...head, "openrouter/auto", GEMINI_PRO_SLUG, GPT_SLUG];
 }
 
 // An EXPLICIT grok slug (force_model / model_slugs) → a grok-DIRECT reasoning seat
@@ -201,10 +232,14 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   const want = ov.n ?? c.suggested_panel_n ?? 1;
   const target = Math.max(want, seats.length, 1);
   // Reasoning-pool fill. If the caller RESTRICTS the pool (model_slugs) we honor it
-  // verbatim — explicit intent overrides diversity. Otherwise a panel (target>=2)
-  // gets the diversity-first order (guarantee family spread, auto as overflow);
-  // a single seat keeps the plain wildcard default.
-  const pool = ov.model_slugs ?? (target >= 2 ? panelFillPool(seats) : DEFAULT_REASONING_POOL);
+  // verbatim — explicit intent overrides diversity. Otherwise: a Grok CALLER
+  // (exclude_family:"grok") gets the no-grok cross-family order on ANY size (even
+  // n=1 wants gemini, not a wildcard that could lean wrong); a non-Grok caller's
+  // panel (target>=2) gets the diversity-first order (grok contrarian + gemini,
+  // auto as overflow); a single seat keeps the plain wildcard default.
+  const pool = ov.model_slugs
+    ?? (ov.exclude_family === "grok" ? grokCallerPool(seats)
+        : target >= 2 ? panelFillPool(seats) : DEFAULT_REASONING_POOL);
   let i = 0;
   while (seats.length < target) {
     seats.push(reasoningSeat(pool[i++ % pool.length], seats.length, lens, effort));
@@ -257,7 +292,12 @@ const CONCURRENCY = 5;
 // can legitimately run ~22s (see reasoning-effort notes), so 25s clipped them —
 // and `auto` (the overflow seat) was the most frequent single dropper at the old
 // ceiling. Concurrent seats mean this only raises worst-case wall-clock, not sum.
-const SLOT_TIMEOUT_MS = 40_000; // plain reasoning seats
+const SLOT_TIMEOUT_MS = 40_000; // plain reasoning seats (openrouter/auto, gemini)
+// Grok-DIRECT reasoning seats (high effort, ungrounded). xAI reasoning latency now
+// routinely exceeds the 40s OR ceiling (live evidence 2026-06-26: high-effort grok-4.3
+// reasoning seat `reason-1` timed out at 40s, retried, timed out again → ~80s burned
+// before salvage). Give grok-direct reasoning the same 60s budget capability seats get.
+const GROK_REASONING_TIMEOUT_MS = 60_000;
 // Capability seats (live-X / grounded) do live search + up to MAX_GROUNDING_RETRIES
 // sequential re-calls, so a 25s ceiling cut them off (gemini-grounded timed out
 // 2026-06-24 while reasoning seats finished) — and a dropped capability seat is the
@@ -438,7 +478,12 @@ async function executeSlots(
 ): Promise<SlotResult[]> {
   return mapLimit(seats, CONCURRENCY, async (s) => {
     const capability = isCapabilitySeat(s);
-    const timeoutMs = capability ? CAPABILITY_SLOT_TIMEOUT_MS : SLOT_TIMEOUT_MS;
+    const grokReasoning = s.provider === "grok-direct" && !capability;
+    // Grok-direct reasoning seats get a wider budget (xAI high-effort reasoning
+    // routinely exceeds 40s — see GROK_REASONING_TIMEOUT_MS).
+    const timeoutMs = capability ? CAPABILITY_SLOT_TIMEOUT_MS
+      : grokReasoning ? GROK_REASONING_TIMEOUT_MS
+      : SLOT_TIMEOUT_MS;
     // Timeout-retry applies to REASONING seats only. A capability seat already runs
     // an internal retry chain inside a long (60s) budget, so a SEAT timeout means a
     // single grounded/x call genuinely stalled — re-running the whole chain just
@@ -446,7 +491,12 @@ async function executeSlots(
     // the client's patience. Caught by Grok 2026-06-25 (force_grounding+n:1 on a
     // non-retrievable prompt timed out the whole call instead of degrading). Capability
     // seats now time out once, fail, and hand off to salvage fast.
-    const maxAttempts = capability ? 0 : MAX_TIMEOUT_RETRIES;
+    // Grok-direct reasoning retries are ALSO skipped: its slowness is DETERMINISTIC
+    // (high-effort grok just takes that long), so a retry re-runs the identical slow
+    // call → guaranteed second timeout → ~2×latency before salvage, no benefit
+    // (Grok find 2026-06-26). OR reasoning (auto/gemini) keeps its 1 retry — a
+    // timeout there is more plausibly transient.
+    const maxAttempts = (capability || grokReasoning) ? 0 : MAX_TIMEOUT_RETRIES;
     let lastMsg = "";
     for (let attempt = 0; attempt <= maxAttempts; attempt++) {
       try {
@@ -703,6 +753,10 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
           .boolean()
           .optional()
           .describe("Add a web-grounded Gemini seat — live Google Search (Gemini-native, routed via OpenRouter) — with required-grounding: it ERRORS rather than return a sourceless answer if no citations come back."),
+        exclude_family: z
+          .string()
+          .optional()
+          .describe("Drop same-FAMILY reasoning seats when the CALLER is that family, so a model doesn't consult itself. Pass \"grok\" when Grok is the caller: the contrarian grok-direct reasoning seat is replaced by genuine cross-family dissent — gemini → gpt-5.5 → openrouter/auto (for 1/2/3+ seats). Capability seats (live-X, grounding) are EXEMPT — a grok-x seat is data retrieval, not Grok's opinion, so it stays. Only \"grok\" is meaningful today."),
       },
     },
     async (args: {
@@ -717,6 +771,7 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
       force_model?: string;
       force_x?: boolean;
       force_grounding?: boolean;
+      exclude_family?: string;
     }) => {
       try {
         const result = await runOracle(deps, args.prompt, {
@@ -730,6 +785,7 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
           force_model: args.force_model,
           force_x: args.force_x,
           force_grounding: args.force_grounding,
+          exclude_family: args.exclude_family,
         });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       } catch (err) {

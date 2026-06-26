@@ -88,6 +88,29 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(s.every((x) => x.model_slug === "~google/gemini-pro-latest"), "model_slugs restriction overrides diversity (explicit caller intent wins)");
 }
 {
+  // GROK CALLER (exclude_family:"grok"): the contrarian grok-direct seat is DROPPED
+  // (Grok can't be its own dissenting voice) and replaced by gemini → gpt → auto.
+  const s1 = buildSlots(C({ suggested_panel_n: 1 }), { exclude_family: "grok" });
+  ok(s1.length === 1 && /gemini/i.test(s1[0].model_slug), "grok-caller n=1 → single gemini seat (not auto, not grok)");
+
+  const s2 = buildSlots(C({ suggested_panel_n: 2 }), { exclude_family: "grok" });
+  ok(s2.length === 2, "grok-caller n=2 → 2 seats");
+  ok(s2.every((x) => x.provider !== "grok-direct" || !!x.grok_grounding), "grok-caller reasoning seats have NO grok-direct voice");
+  ok(/gemini/i.test(s2[0].model_slug) && /gpt/i.test(s2[1].model_slug), "grok-caller n=2 → gemini then gpt (the two dissenting families)");
+
+  const s3 = buildSlots(C({ suggested_panel_n: 3 }), { exclude_family: "grok" });
+  ok(s3.length === 3, "grok-caller n=3 → 3 seats");
+  ok(s3[2].model_slug === "openrouter/auto", "grok-caller n=3 → auto is the 3rd/overflow voice only");
+  ok(!s3.some((x) => x.provider === "grok-direct" && !x.grok_grounding), "no grok-direct REASONING seat anywhere on a grok-caller panel");
+}
+{
+  // GROK CALLER keeps capability seats — grok-x is data retrieval, NOT Grok's opinion
+  const s = buildSlots(C({ needs_x: true, suggested_panel_n: 3 }), { exclude_family: "grok" });
+  ok(s[0].id === "grok-x" && s[0].provider === "grok-direct", "grok-caller STILL seats the grok-x CAPABILITY seat (data, not opinion)");
+  ok(!s.slice(1).some((x) => x.provider === "grok-direct"), "but no grok-direct REASONING seat among the rest");
+  ok(/gemini/i.test(s[1].model_slug) && /gpt/i.test(s[2].model_slug), "reasoning voices fill gemini → gpt after the capability seat");
+}
+{
   const s = buildSlots(C({ needs_x: true, suggested_panel_n: 3 }), {});
   ok(s.length === 3 && s[0].id === "grok-x", "capability seat counts toward panel size, listed first");
 }
