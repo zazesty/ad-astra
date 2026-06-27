@@ -3,7 +3,7 @@ import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { z } from "zod";
 
-const MEMORY_DIR = process.env.MEMORY_DIR ?? "/root/.claude/projects/-root/memory";
+const MEMORY_DIR = process.env.MEMORY_DIR ?? "/root/memory";
 
 export interface MemoryFact {
   id: string;
