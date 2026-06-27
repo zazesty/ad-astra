@@ -7,6 +7,7 @@ import { registerGrokXSearch } from "./grokXSearch.js";
 import { registerAskPanel } from "./panel.js";
 import { registerNewsDigest } from "./newsDigest.js";
 import { registerAskOracle } from "./oracleEngine.js";
+import { registerMemoryTools, loadMemoryIndexRaw } from "./memory.js";
 import { loadLensesRaw } from "./lenses.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
@@ -78,6 +79,26 @@ function buildServer() {
     openrouterApiKey: OPENROUTER_API_KEY,
     xaiBaseUrl: XAI_BASE_URL,
   });
+
+  // Shared KB over the existing Claude Code auto-memory directory.
+  // Four tools: search / retrieve / upsert / list. File-backed, live reads,
+  // writes are the single authority for cross-harness facts.
+  registerMemoryTools(server);
+
+  // Memory KB index as a resource so clients can fetch the full tagged TOC
+  // without a tool call (consistent with lenses://frames).
+  server.registerResource(
+    "memory-index",
+    "memory://index",
+    {
+      title: "Memory KB Index",
+      description: "Tagged index and TOC of the shared memory store (the MCP-queryable astra/grok-mcp KB). Read this directly for overview; use the memory_* tools for search/upsert.",
+      mimeType: "text/markdown",
+    },
+    async (uri) => ({
+      contents: [{ uri: uri.href, mimeType: "text/markdown", text: loadMemoryIndexRaw() || "(empty)" }],
+    }),
+  );
 
   // Lens menu as a readable resource (not a tool param), so any client can
   // discover the frames and edits to lenses.md need no schema change / redeploy.
