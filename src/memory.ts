@@ -160,24 +160,51 @@ function hasAllTags(fact: MemoryFact, tags: string[]): boolean {
   return tags.every(t => set.has(t.toLowerCase()));
 }
 
-async function searchFacts(dir: string, opts: { query?: string; tags?: string[]; limit?: number }): Promise<any> {
+async function searchFacts(dir: string, opts: { query?: string; tags?: string[]; limit?: number; expand_related?: boolean }): Promise<any> {
   const all = await loadAllFacts(dir);
   const filtered = all
     .filter(f => matchesQuery(f, opts.query || "") && hasAllTags(f, opts.tags || []))
     .sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
   const limit = Math.min(opts.limit ?? 10, 50);
-  const results = filtered.slice(0, limit).map(f => ({
+  let results = filtered.slice(0, limit).map(f => ({
     id: f.id,
     name: f.name,
     description: f.description,
     tags: f.tags,
     updated: f.updated,
     excerpt: f.content.slice(0, 220).replace(/\s+/g, " ").trim() + (f.content.length > 220 ? "..." : ""),
+    related: f.related || [],
   }));
+  if (opts.expand_related) {
+    const seen = new Set(results.map(r => r.id));
+    const extra: any[] = [];
+    for (const f of results) {
+      for (const rid of f.related || []) {
+        if (!seen.has(rid)) {
+          const rf = all.find(ff => ff.id === rid);
+          if (rf) {
+            extra.push({
+              id: rf.id,
+              name: rf.name,
+              description: rf.description,
+              tags: rf.tags,
+              updated: rf.updated,
+              excerpt: rf.content.slice(0, 150).replace(/\s+/g, " ").trim() + "...",
+              related: rf.related || [],
+              _via: f.id,
+            });
+            seen.add(rid);
+          }
+        }
+      }
+    }
+    results = [...results, ...extra];
+  }
   return {
     count: results.length,
     total: filtered.length,
     facts: results,
+    expanded: !!opts.expand_related,
   };
 }
 
@@ -256,6 +283,20 @@ async function upsertFact(dir: string, input: {
     existing = await readFact(filePath);
   } catch {}
 
+  // Auto-harvest [[slug]] from content into related (clarified: scans body for [[id]] patterns
+  // and unions them into related[] so the fact graph builds itself with zero extra work).
+  const harvested: string[] = [];
+  const re = /\[\[([a-z0-9_-]+)\]\]/g;
+  let m;
+  const contentForHarvest = input.content || "";
+  while ((m = re.exec(contentForHarvest))) {
+    let slug = m[1];
+    if (slug.endsWith(".md")) slug = slug.slice(0, -3);
+    if (slug !== id && !harvested.includes(slug)) harvested.push(slug);
+  }
+  const baseRelated = input.related || existing?.related || [];
+  const mergedRelated = [...new Set([...baseRelated, ...harvested])].filter(Boolean);
+
   const now = new Date().toISOString();
   const fact: MemoryFact = {
     id,
@@ -265,7 +306,7 @@ async function upsertFact(dir: string, input: {
     created: existing?.created || now,
     updated: now,
     version: (existing?.version || 0) + 1,
-    related: (input.related || existing?.related || []).filter(Boolean),
+    related: mergedRelated,
     content: input.content.trim(),
     metadata: existing?.metadata,
   };
@@ -314,7 +355,7 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Search",
       description:
-        "Search the shared cross-harness memory KB (facts, decisions, gotchas, setup). Keyword match on name/desc/body + tag filter (AND). Returns headers + excerpts. Discovery tool — follow up with memory_retrieve for bodies. Single source of truth (Claude auto-memory + Grok Build + future agents all share this).",
+        "Search the shared cross-harness memory KB (facts, decisions, gotchas, setup; the single source of truth also used by Claude Code auto-memory). Keyword match on name/desc/body + tag filter (AND). Returns headers + excerpts. Discovery tool — follow up with memory_retrieve for bodies. For a plain unfiltered enumeration with no keyword, prefer memory_list (cheaper, headers-only).",
       inputSchema: {
         query: z
           .string()
@@ -331,11 +372,15 @@ export function registerMemoryTools(server: any) {
           .max(50)
           .optional()
           .describe("Maximum results to return (default 10)."),
+        expand_related: z
+          .boolean()
+          .optional()
+          .describe("If true, also include 1-hop related facts (via related[] links) for better discovery. Default false."),
       },
     },
-    async ({ query, tags, limit }: { query?: string; tags?: string[]; limit?: number }) => {
+    async ({ query, tags, limit, expand_related }: { query?: string; tags?: string[]; limit?: number; expand_related?: boolean }) => {
       try {
-        const res = await searchFacts(MEMORY_DIR, { query, tags, limit });
+        const res = await searchFacts(MEMORY_DIR, { query, tags, limit, expand_related });
         return { content: [{ type: "text", text: JSON.stringify(res, null, 2) }] };
       } catch (err) {
         return { content: [{ type: "text", text: `memory_search failed: ${(err as Error).message}` }], isError: true };
@@ -348,7 +393,7 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Retrieve",
       description:
-        "Return one complete fact by id (slug). Includes normalized frontmatter + full body markdown. Call after search or when you have a [[slug]]. Single source of truth shared with Claude Code auto-memory.",
+        "Return one complete fact by id (the stable slug used as filename and key). [[slug]] refers to this id. Includes normalized frontmatter fields + full markdown body. Call after search or when you have a [[id]]. Part of the single source of truth shared with Claude Code auto-memory.",
       inputSchema: {
         id: z
           .string()
@@ -371,13 +416,13 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Upsert",
       description:
-        "Write (create or update) a fact into the shared KB (same dir as Claude auto-memory). Merge-safe: keeps original metadata. Bumps updated+version. Pass clean body only (no --- frontmatter). This is the *only* write path for auto-update and cross-harness facts.",
+        "Create or update a fact in the shared KB (the single source of truth also used by Claude Code auto-memory + Grok Build). On update: omitted fields are preserved; any field you pass completely replaces the previous value (tags/related arrays are replaced, not unioned — send the full desired set). Bumps updated + version. Provide clean markdown body only (no --- frontmatter block). If editing a fact retrieved via memory_retrieve, strip the frontmatter it returned before sending. This is the only write path for auto-update and cross-harness facts.",
       inputSchema: {
         id: z.string().optional().describe("Optional explicit id/slug. Defaults to sanitized `name`."),
         name: z
           .string()
           .min(1)
-          .describe("Stable human-readable slug used for filename and id (e.g. 'my-new-fact')."),
+          .describe("Stable kebab-case slug; also serves as the id unless id is explicitly set (e.g. 'my-new-fact'). Used for filename and lookup."),
         description: z.string().optional().describe("One-line summary for the index."),
         content: z
           .string()
@@ -390,6 +435,9 @@ export function registerMemoryTools(server: any) {
     async (input: { id?: string; name: string; description?: string; content: string; tags?: string[]; related?: string[] }) => {
       try {
         const fact = await upsertFact(MEMORY_DIR, input);
+        const wasUpdate = !!(await (async () => {
+          try { return await readFact(join(MEMORY_DIR, `${fact.id}.md`)); } catch { return null; }
+        })() ); // simplistic: if file existed before this upsert
         return {
           content: [{
             type: "text",
@@ -399,6 +447,8 @@ export function registerMemoryTools(server: any) {
               updated: fact.updated,
               version: fact.version,
               tags: fact.tags,
+              status: wasUpdate ? "updated_existing" : "created",
+              conflict_flag: false,  // simple flag; set true in future if search detected near-dup before upsert
             }, null, 2)
           }]
         };
@@ -413,7 +463,7 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory List",
       description:
-        "List fact headers (id, name, desc, tags, updated). Optional tag filter. Cheap overview or TOC builder. Use when you don't need bodies yet.",
+        "List fact headers (id, name, desc, tags, updated). Optional tag filter. Cheap overview or TOC builder. Use when you don't need bodies yet. No keyword/body matching — use memory_search for that. Best for full enumeration or a TOC. Part of the single source of truth shared with Claude Code auto-memory.",
       inputSchema: {
         tags: z.array(z.string()).optional().describe("Filter to facts having ALL listed tags."),
         limit: z.number().int().min(1).max(200).optional().describe("Max facts (default 100)."),
