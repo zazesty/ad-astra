@@ -2,8 +2,18 @@ import { readFileSync } from "node:fs";
 import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { z } from "zod";
+import {
+  cosineSimilarity,
+  embedFactText,
+  embedTextForFact,
+  loadEmbeddings,
+  saveEmbeddings,
+} from "./memoryEmbeddings.js";
 
 const MEMORY_DIR = process.env.MEMORY_DIR ?? "/root/memory";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+export type FactStatus = "active" | "superseded" | "archived";
 
 /** Verbatim preamble for index.md — survives regeneration. */
 const INDEX_PREAMBLE = `# Memory KB — Index & TOC
@@ -37,12 +47,23 @@ export interface MemoryFact {
   name: string;
   description: string;
   tags: string[];
+  status: FactStatus;
+  superseded_by?: string;
   created: string;
   updated: string;
   version: number;
   related: string[];
   content: string;
   metadata?: Record<string, any>;
+}
+
+function parseStatus(v: unknown): FactStatus {
+  if (v === "superseded" || v === "archived") return v;
+  return "active";
+}
+
+export function isActiveFact(f: MemoryFact): boolean {
+  return f.status === "active";
 }
 
 function ensureArray(v: any): string[] {
@@ -140,6 +161,8 @@ async function readFact(filePath: string): Promise<MemoryFact | null> {
       name,
       description,
       tags,
+      status: parseStatus(data.status),
+      superseded_by: data.superseded_by || undefined,
       created,
       updated,
       version,
@@ -198,7 +221,8 @@ function detectNearDuplicate(
 }
 
 function buildMemoryMd(facts: MemoryFact[]): string {
-  const lines = facts
+  const active = facts.filter(isActiveFact);
+  const lines = active
     .slice()
     .sort((a, b) => a.id.localeCompare(b.id))
     .map(f => `- [${humanizeTitle(f)}](${f.id}.md) — ${f.description}`);
@@ -207,7 +231,9 @@ function buildMemoryMd(facts: MemoryFact[]): string {
 
 function buildIndexMd(facts: MemoryFact[]): string {
   const date = new Date().toISOString().slice(0, 10);
-  const sorted = facts.slice().sort((a, b) => a.id.localeCompare(b.id));
+  const active = facts.filter(isActiveFact);
+  const archived = facts.filter((f) => !isActiveFact(f));
+  const sorted = active.slice().sort((a, b) => a.id.localeCompare(b.id));
 
   const byTag = new Map<string, MemoryFact[]>();
   for (const f of sorted) {
@@ -232,13 +258,23 @@ function buildIndexMd(facts: MemoryFact[]): string {
     alpha.push(`- [${f.id}](${f.id}.md) \`${f.tags.join(" ")}\``);
   }
 
+  const archiveSection: string[] = [];
+  if (archived.length) {
+    archiveSection.push("## Archive", "");
+    for (const f of archived.sort((a, b) => a.id.localeCompare(b.id))) {
+      archiveSection.push(`- [${f.id}](${f.id}.md) \`${f.status}\` \`${f.tags.join(" ")}\``);
+    }
+    archiveSection.push("");
+  }
+
   return (
     INDEX_PREAMBLE +
-    `${facts.length} facts. Updated ${date}\n\n` +
+    `${active.length} active facts (${facts.length} total). Updated ${date}\n\n` +
     grouped.join("\n") +
     "\n" +
     alpha.join("\n") +
-    "\n"
+    "\n" +
+    archiveSection.join("\n")
   );
 }
 
@@ -251,15 +287,19 @@ export async function regenerateIndexes(dir: string): Promise<{ factCount: numbe
   return { factCount: facts.length };
 }
 
-function matchesQuery(fact: MemoryFact, query: string): boolean {
-  if (!query) return true;
+function keywordScore(fact: MemoryFact, query: string): number {
+  if (!query) return 0;
   const q = query.toLowerCase();
-  return (
-    fact.name.toLowerCase().includes(q) ||
-    fact.description.toLowerCase().includes(q) ||
-    fact.content.toLowerCase().includes(q) ||
-    fact.tags.some(t => t.toLowerCase().includes(q))
-  );
+  let score = 0;
+  if (fact.name.toLowerCase().includes(q)) score += 4;
+  if (fact.description.toLowerCase().includes(q)) score += 3;
+  if (fact.tags.some(t => t.toLowerCase().includes(q))) score += 2;
+  if (fact.content.toLowerCase().includes(q)) score += 1;
+  return score;
+}
+
+function matchesQuery(fact: MemoryFact, query: string): boolean {
+  return keywordScore(fact, query) > 0;
 }
 
 function hasAllTags(fact: MemoryFact, tags: string[]): boolean {
@@ -268,12 +308,46 @@ function hasAllTags(fact: MemoryFact, tags: string[]): boolean {
   return tags.every(t => set.has(t.toLowerCase()));
 }
 
-async function searchFacts(dir: string, opts: { query?: string; tags?: string[]; limit?: number; expand_related?: boolean }): Promise<any> {
+async function searchFacts(
+  dir: string,
+  opts: { query?: string; tags?: string[]; limit?: number; expand_related?: boolean; include_archived?: boolean },
+): Promise<any> {
   const all = await loadAllFacts(dir);
-  const filtered = all
-    .filter(f => matchesQuery(f, opts.query || "") && hasAllTags(f, opts.tags || []))
-    .sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
+  const pool = opts.include_archived ? all : all.filter(isActiveFact);
+  const tagFiltered = pool.filter((f) => hasAllTags(f, opts.tags || []));
+  const query = (opts.query || "").trim();
   const limit = Math.min(opts.limit ?? 10, 50);
+
+  let ranked: { fact: MemoryFact; score: number }[];
+
+  if (query) {
+    const embeddings = await loadEmbeddings(dir);
+    let queryVec: number[] | null = null;
+    if (GEMINI_API_KEY) {
+      queryVec = await embedFactText(GEMINI_API_KEY, query);
+    }
+
+    ranked = tagFiltered.map((fact) => {
+      const kw = keywordScore(fact, query);
+      let sem = 0;
+      const vec = embeddings[fact.id];
+      if (queryVec && vec?.length) {
+        sem = cosineSimilarity(queryVec, vec);
+      }
+      // Hybrid: semantic rank within tag filter, keyword as boost + fallback floor.
+      const score = sem * 10 + kw;
+      return { fact, score };
+    });
+    ranked = ranked
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score || (b.fact.updated || "").localeCompare(a.fact.updated || ""));
+  } else {
+    ranked = tagFiltered
+      .map((fact) => ({ fact, score: 0 }))
+      .sort((a, b) => (b.fact.updated || "").localeCompare(a.fact.updated || ""));
+  }
+
+  const filtered = ranked.map((r) => r.fact);
   let results = filtered.slice(0, limit).map(f => ({
     id: f.id,
     name: f.name,
@@ -344,6 +418,12 @@ function buildFrontmatter(fact: MemoryFact): string {
   const lines: string[] = ["---"];
   lines.push(`id: ${fact.id}`);
   lines.push(`name: ${fact.name}`);
+  if (fact.status && fact.status !== "active") {
+    lines.push(`status: ${fact.status}`);
+  }
+  if (fact.superseded_by) {
+    lines.push(`superseded_by: ${fact.superseded_by}`);
+  }
   if (fact.description) {
     const desc = fact.description.replace(/"/g, '\\"');
     lines.push(`description: "${desc}"`);
@@ -381,6 +461,8 @@ async function upsertFact(dir: string, input: {
   content: string;
   tags?: string[];
   related?: string[];
+  status?: FactStatus;
+  superseded_by?: string;
 }): Promise<MemoryFact> {
   const id = (input.id || input.name).replace(/\.md$/, "");
   const filePath = join(dir, `${id}.md`);
@@ -411,6 +493,8 @@ async function upsertFact(dir: string, input: {
     name: input.name,
     description: input.description || (existing?.description || ""),
     tags: (input.tags || existing?.tags || []).filter(Boolean),
+    status: input.status ?? existing?.status ?? "active",
+    superseded_by: input.superseded_by ?? existing?.superseded_by,
     created: existing?.created || now,
     updated: now,
     version: (existing?.version || 0) + 1,
@@ -422,16 +506,27 @@ async function upsertFact(dir: string, input: {
   const front = buildFrontmatter(fact);
   const full = front + fact.content + (fact.content.endsWith("\n") ? "" : "\n");
   await writeFile(filePath, full, "utf8");
+
+  if (GEMINI_API_KEY) {
+    const vec = await embedFactText(GEMINI_API_KEY, embedTextForFact(fact));
+    if (vec) {
+      const store = await loadEmbeddings(dir);
+      store[fact.id] = vec;
+      await saveEmbeddings(dir, store);
+    }
+  }
+
   await regenerateIndexes(dir);
 
   return fact;
 }
 
-async function listFacts(dir: string, tags?: string[], limit?: number): Promise<any> {
+async function listFacts(dir: string, tags?: string[], limit?: number, includeArchived?: boolean): Promise<any> {
   const all = await loadAllFacts(dir);
+  const base = includeArchived ? all : all.filter(isActiveFact);
   const filtered = tags && tags.length
-    ? all.filter(f => hasAllTags(f, tags))
-    : all;
+    ? base.filter(f => hasAllTags(f, tags))
+    : base;
   const lim = Math.min(limit ?? 100, 200);
   const items = filtered
     .sort((a, b) => b.updated.localeCompare(a.updated))
@@ -441,6 +536,7 @@ async function listFacts(dir: string, tags?: string[], limit?: number): Promise<
       name: f.name,
       description: f.description,
       tags: f.tags,
+      status: f.status,
       updated: f.updated,
       version: f.version,
     }));
@@ -464,7 +560,7 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Search",
       description:
-        "Search the shared cross-harness memory KB (facts, decisions, gotchas, setup; the single source of truth also used by Claude Code auto-memory). Keyword match on name/desc/body + tag filter (AND). Returns headers + excerpts. Discovery tool — follow up with memory_retrieve for bodies. For a plain unfiltered enumeration with no keyword, prefer memory_list (cheaper, headers-only).",
+        "Search the shared cross-harness memory KB (facts, decisions, gotchas, setup; the single source of truth also used by Claude Code auto-memory). Hybrid search: tag filter (hard AND pre-filter) → semantic cosine rank → keyword boost/fallback. Defaults to active facts only. Returns headers + excerpts. Discovery tool — follow up with memory_retrieve for bodies. For a plain unfiltered enumeration with no keyword, prefer memory_list (cheaper, headers-only).",
       inputSchema: {
         query: z
           .string()
@@ -485,11 +581,15 @@ export function registerMemoryTools(server: any) {
           .boolean()
           .optional()
           .describe("If true, also include 1-hop related facts (via related[] links) for better discovery. Default false."),
+        include_archived: z
+          .boolean()
+          .optional()
+          .describe("If true, include superseded/archived facts (default false — active only)."),
       },
     },
-    async ({ query, tags, limit, expand_related }: { query?: string; tags?: string[]; limit?: number; expand_related?: boolean }) => {
+    async ({ query, tags, limit, expand_related, include_archived }: { query?: string; tags?: string[]; limit?: number; expand_related?: boolean; include_archived?: boolean }) => {
       try {
-        const res = await searchFacts(MEMORY_DIR, { query, tags, limit, expand_related });
+        const res = await searchFacts(MEMORY_DIR, { query, tags, limit, expand_related, include_archived });
         return { content: [{ type: "text", text: JSON.stringify(res, null, 2) }] };
       } catch (err) {
         return { content: [{ type: "text", text: `memory_search failed: ${(err as Error).message}` }], isError: true };
@@ -539,9 +639,17 @@ export function registerMemoryTools(server: any) {
           .describe("Full markdown body (without the leading --- frontmatter block)."),
         tags: z.array(z.string()).optional().describe("Tags for filtering and organization."),
         related: z.array(z.string()).optional().describe("Related fact ids (for graph navigation)."),
+        status: z
+          .enum(["active", "superseded", "archived"])
+          .optional()
+          .describe("Lifecycle status (default active). Use superseded/archived to retire facts."),
+        superseded_by: z
+          .string()
+          .optional()
+          .describe("When superseding, id of the replacement fact."),
       },
     },
-    async (input: { id?: string; name: string; description?: string; content: string; tags?: string[]; related?: string[] }) => {
+    async (input: { id?: string; name: string; description?: string; content: string; tags?: string[]; related?: string[]; status?: FactStatus; superseded_by?: string }) => {
       try {
         const id = (input.id || input.name).replace(/\.md$/, "");
         let hadExisting = false;
@@ -557,6 +665,9 @@ export function registerMemoryTools(server: any) {
         );
 
         const fact = await upsertFact(MEMORY_DIR, input);
+        const supersedeHint = conflictWith
+          ? `Near-duplicate of '${conflictWith}' — consider superseding the old fact (status:superseded, superseded_by:${fact.id}) instead of creating a twin.`
+          : undefined;
         return {
           content: [{
             type: "text",
@@ -566,9 +677,11 @@ export function registerMemoryTools(server: any) {
               updated: fact.updated,
               version: fact.version,
               tags: fact.tags,
-              status: hadExisting ? "updated_existing" : "created",
+              fact_status: fact.status,
+              upsert_action: hadExisting ? "updated_existing" : "created",
               conflict_flag: !!conflictWith,
               conflict_with: conflictWith || undefined,
+              supersede_hint: supersedeHint,
             }, null, 2)
           }]
         };
@@ -583,15 +696,19 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory List",
       description:
-        "List fact headers (id, name, desc, tags, updated). Optional tag filter. Cheap overview or TOC builder. Use when you don't need bodies yet. No keyword/body matching — use memory_search for that. Best for full enumeration or a TOC. Part of the single source of truth shared with Claude Code auto-memory.",
+        "List fact headers (id, name, desc, tags, status, updated). Optional tag filter. Defaults to active facts only. Cheap overview or TOC builder. Use when you don't need bodies yet. No keyword/body matching — use memory_search for that. Best for full enumeration or a TOC. Part of the single source of truth shared with Claude Code auto-memory.",
       inputSchema: {
         tags: z.array(z.string()).optional().describe("Filter to facts having ALL listed tags."),
         limit: z.number().int().min(1).max(200).optional().describe("Max facts (default 100)."),
+        include_archived: z
+          .boolean()
+          .optional()
+          .describe("If true, include superseded/archived facts (default false)."),
       },
     },
-    async ({ tags, limit }: { tags?: string[]; limit?: number }) => {
+    async ({ tags, limit, include_archived }: { tags?: string[]; limit?: number; include_archived?: boolean }) => {
       try {
-        const res = await listFacts(MEMORY_DIR, tags, limit);
+        const res = await listFacts(MEMORY_DIR, tags, limit, include_archived);
         return { content: [{ type: "text", text: JSON.stringify(res, null, 2) }] };
       } catch (err) {
         return { content: [{ type: "text", text: `memory_list failed: ${(err as Error).message}` }], isError: true };

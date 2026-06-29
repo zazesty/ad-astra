@@ -24,6 +24,12 @@ import {
   type GeminiTransport,
 } from "./geminiCore.js";
 import { applyLens, buildLensParamDescription } from "./lenses.js";
+import {
+  classifyError,
+  familyFromSlug,
+  hashQuestion,
+  recordSeatMetric,
+} from "./metrics.js";
 
 type RegisterOpts = {
   xaiApiKey: string | undefined;
@@ -131,7 +137,40 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       },
     },
     async ({ specs }: { specs: z.infer<typeof specSchema>[] }) => {
-      const settled = await mapLimit(specs, CONCURRENCY, async (spec) => {
+      const settled = await mapLimit(specs, CONCURRENCY, async (spec, idx) => {
+        const t0 = Date.now();
+        const label = spec.label ?? spec.model;
+        const seatId = `panel-${idx}-${label}`;
+        const qHash = hashQuestion(spec.prompt);
+        const record = (ok: boolean, extra: {
+          text?: string;
+          citations?: string[];
+          error?: string;
+          transport: "or" | "direct";
+          timed_out?: boolean;
+        }) => {
+          void recordSeatMetric({
+            ts: new Date().toISOString(),
+            tool: "panel",
+            route_mode: "panel",
+            seat_id: seatId,
+            family: spec.model === "grok" ? "grok" : familyFromSlug(spec.model_slug || "gemini"),
+            model_slug: spec.model_slug || spec.model,
+            transport: extra.transport,
+            grounded_requested: !!spec.grounded,
+            grounding_fired: ok && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
+            x_search_fired: ok && spec.model === "grok" && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
+            reasoning_effort: spec.reasoning_effort ?? "medium",
+            latency_ms: Date.now() - t0,
+            failover_fired: false,
+            timed_out: !!extra.timed_out,
+            ok,
+            error_class: classifyError(ok ? "ok" : extra.timed_out ? "timeout" : "error", extra.error),
+            question_hash: qHash,
+            prompt_preview: process.env.METRICS_LOG_PROMPTS === "1" ? spec.prompt : undefined,
+          });
+        };
+
         // Resolve lens → effective system per spec (default second-opinion frame
         // auto-applies when neither lens nor system is given; pass lens:"none" to opt out).
         const { system, error } = applyLens(spec.lens, spec.system);
@@ -139,20 +178,27 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
 
         if (spec.model === "grok") {
           const grounding: Grounding = spec.grounded ? "auto" : "off";
-          const r = await callGrok(
-            opts.xaiApiKey,
-            spec.prompt,
-            {
-              system,
-              model: spec.model_slug,
-              reasoning_effort: spec.reasoning_effort,
-              temperature: spec.temperature,
-              grounding,
-              include_web: spec.include_web,
-            },
-            xaiBaseUrl,
-          );
-          return { text: r.text, citations: r.citations };
+          try {
+            const r = await callGrok(
+              opts.xaiApiKey,
+              spec.prompt,
+              {
+                system,
+                model: spec.model_slug,
+                reasoning_effort: spec.reasoning_effort,
+                temperature: spec.temperature,
+                grounding,
+                include_web: spec.include_web,
+              },
+              xaiBaseUrl,
+            );
+            record(true, { text: r.text, citations: r.citations, transport: "direct" });
+            return { text: r.text, citations: r.citations };
+          } catch (e) {
+            const msg = (e as Error)?.message ?? String(e);
+            record(false, { error: msg, transport: "direct", timed_out: /timed out/i.test(msg) });
+            throw e;
+          }
         }
         // gemini — transport chosen by GEMINI_TRANSPORT (env). The OpenRouter
         // path (BYOK) handles both ungrounded and grounded specs; grounded forces
@@ -190,23 +236,30 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         // google_search_retrieval on gemini-3.1-pro (the always-execute retrieval
         // tool is Vertex-only), so both transports are inherently AUTO.
         const MAX_GROUNDING_RETRIES = 2;
-        let r = await callGeminiOnce();
-        if (spec.grounded) {
-          const label = spec.label ?? "gemini";
-          for (let attempt = 1; attempt <= MAX_GROUNDING_RETRIES && r.citations.length === 0; attempt++) {
-            console.error(`[ask_panel] gemini grounded miss (0 citations) — retry ${attempt}/${MAX_GROUNDING_RETRIES}. label=${label}`);
-            r = await callGeminiOnce();
+        const transport: "or" | "direct" = geminiTransport === "openrouter" ? "or" : "direct";
+        try {
+          let r = await callGeminiOnce();
+          if (spec.grounded) {
+            for (let attempt = 1; attempt <= MAX_GROUNDING_RETRIES && r.citations.length === 0; attempt++) {
+              console.error(`[ask_panel] gemini grounded miss (0 citations) — retry ${attempt}/${MAX_GROUNDING_RETRIES}. label=${label}`);
+              r = await callGeminiOnce();
+            }
+            if (r.citations.length === 0) {
+              throw new Error(
+                `grounding_fired:false — Gemini grounded request returned zero citations after ` +
+                  `${MAX_GROUNDING_RETRIES} retries. Refusing to pass back a weights-only answer as if ` +
+                  `it were grounded; the answer may be stale/hallucinated. Retry, rephrase to demand ` +
+                  `sources, or use a grok spec.`,
+              );
+            }
           }
-          if (r.citations.length === 0) {
-            throw new Error(
-              `grounding_fired:false — Gemini grounded request returned zero citations after ` +
-                `${MAX_GROUNDING_RETRIES} retries. Refusing to pass back a weights-only answer as if ` +
-                `it were grounded; the answer may be stale/hallucinated. Retry, rephrase to demand ` +
-                `sources, or use a grok spec.`,
-            );
-          }
+          record(true, { text: r.text, citations: r.citations, transport });
+          return { text: r.text, citations: r.citations };
+        } catch (e) {
+          const msg = (e as Error)?.message ?? String(e);
+          record(false, { error: msg, transport, timed_out: /timed out/i.test(msg) });
+          throw e;
         }
-        return { text: r.text, citations: r.citations };
       });
 
       const results = settled.map((r, i) => {

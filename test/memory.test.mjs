@@ -64,7 +64,7 @@ try {
   check("index.md grouped by grok-mcp", index.includes("### grok-mcp"));
   check("index.md grouped by infra", index.includes("### infra"));
   check("index.md alphabetical section", index.includes("## Alphabetical"));
-  check("index.md fact count", index.includes("2 facts. Updated"));
+  check("index.md fact count", index.includes("2 active facts (2 total). Updated"));
 
   const facts = await loadAllFacts(dir);
   check("loadAllFacts skips indexes", facts.length === 2);

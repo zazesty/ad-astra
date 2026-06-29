@@ -9,6 +9,7 @@ import { registerNewsDigest } from "./newsDigest.js";
 import { registerAskOracle } from "./oracleEngine.js";
 import { registerMemoryTools, loadMemoryIndexRaw } from "./memory.js";
 import { loadLensesRaw } from "./lenses.js";
+import { registerGetMetrics } from "./metrics.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -84,6 +85,7 @@ function buildServer() {
   // Four tools: search / retrieve / upsert / list. File-backed, live reads,
   // writes are the single authority for cross-harness facts.
   registerMemoryTools(server);
+  registerGetMetrics(server);
 
   // Memory KB index as a resource so clients can fetch the full tagged TOC
   // without a tool call (consistent with lenses://frames).

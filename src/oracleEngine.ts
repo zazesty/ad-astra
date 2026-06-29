@@ -34,6 +34,13 @@ import {
   type Classification,
   type Effort,
 } from "./oracleClassifier.js";
+import {
+  classifyError,
+  familyFromSlug,
+  hashQuestion,
+  recordSeatMetric,
+  type SeatMetricRecord,
+} from "./metrics.js";
 
 export type { Effort };
 
@@ -355,12 +362,22 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out;
 }
 
+interface DispatchOutcome {
+  text: string;
+  citations: string[];
+  transport: "or" | "direct";
+  failover_fired: boolean;
+}
+
 interface SlotResult {
   seat: Seat;
   status: "ok" | "error" | "timeout";
   text?: string;
   citations?: string[];
   error?: string;
+  transport?: "or" | "direct";
+  failover_fired?: boolean;
+  latency_ms?: number;
 }
 
 /** Zero-citation fail-loud retry, generic over the call path (OR-native or direct
@@ -397,7 +414,7 @@ async function groundedWithFailover(
   prompt: string,
   s: Seat,
   system: string | undefined,
-): Promise<{ text: string; citations: string[] }> {
+): Promise<DispatchOutcome> {
   const orOnce = () =>
     callOpenRouter(deps.openrouterApiKey, s.model_slug, prompt, {
       system,
@@ -405,7 +422,8 @@ async function groundedWithFailover(
       grounded: true,
     });
   try {
-    return await groundedWithRetry(orOnce, s.id, "or-native");
+    const r = await groundedWithRetry(orOnce, s.id, "or-native");
+    return { ...r, transport: "or", failover_fired: false };
   } catch (e) {
     const groundingMiss =
       e instanceof Error && e.message.includes("grounding_fired:false");
@@ -420,13 +438,15 @@ async function groundedWithFailover(
           reasoning_effort: s.reasoning_effort,
           grounded: true,
         });
-      return groundedWithRetry(directOnce, s.id, "direct-grounding-miss");
+      const r = await groundedWithRetry(directOnce, s.id, "direct-grounding-miss");
+      return { ...r, transport: "direct", failover_fired: true };
     }
     if (!isTransientError(e)) throw e;
     console.error(`[ask_oracle] OR transient fail on grounded seat ${s.id} — failover → direct-gemini grounding: ${(e as Error).message}`);
     const client = makeGeminiClient(deps.geminiApiKey);
     const directOnce = () => callGemini(client, prompt, { system, reasoning_effort: s.reasoning_effort, grounded: true });
-    return groundedWithRetry(directOnce, s.id, "direct-failover");
+    const r = await groundedWithRetry(directOnce, s.id, "direct-failover");
+    return { ...r, transport: "direct", failover_fired: true };
   }
 }
 
@@ -442,17 +462,19 @@ async function orReasoningWithFailover(
   slug: string,
   prompt: string,
   opts: { system?: string; reasoning_effort: Effort },
-): Promise<{ text: string; citations: string[] }> {
+): Promise<DispatchOutcome> {
   try {
-    return await callOpenRouter(deps.openrouterApiKey, slug, prompt, opts);
+    const r = await callOpenRouter(deps.openrouterApiKey, slug, prompt, opts);
+    return { text: r.text, citations: r.citations, transport: "or", failover_fired: false };
   } catch (e) {
     if (!isTransientError(e)) throw e;
     if (/gemini/i.test(slug)) {
       console.error(`[ask_oracle] OR transient fail on ${slug} — failover → direct-gemini: ${(e as Error).message}`);
-      return callGemini(makeGeminiClient(deps.geminiApiKey), prompt, {
+      const r = await callGemini(makeGeminiClient(deps.geminiApiKey), prompt, {
         system: opts.system,
         reasoning_effort: opts.reasoning_effort,
       });
+      return { text: r.text, citations: r.citations, transport: "direct", failover_fired: true };
     }
     console.error(`[ask_oracle] OR transient fail on ${slug} — failover → grok-direct: ${(e as Error).message}`);
     const r = await callGrok(
@@ -461,7 +483,7 @@ async function orReasoningWithFailover(
       { system: opts.system, reasoning_effort: opts.reasoning_effort, grounding: "off" },
       deps.xaiBaseUrl,
     );
-    return { text: r.text, citations: r.citations };
+    return { text: r.text, citations: r.citations, transport: "direct", failover_fired: true };
   }
 }
 
@@ -470,7 +492,7 @@ async function dispatchSeat(
   prompt: string,
   s: Seat,
   callerSystem?: string,
-): Promise<{ text: string; citations: string[] }> {
+): Promise<DispatchOutcome> {
   // lens body first, caller's system text after (applyLens composes them).
   const { system, error } = applyLens(s.lens, callerSystem);
   if (error) throw new Error(error);
@@ -487,7 +509,7 @@ async function dispatchSeat(
       },
       deps.xaiBaseUrl,
     );
-    return { text: r.text, citations: r.citations };
+    return { text: r.text, citations: r.citations, transport: "direct", failover_fired: false };
   }
   if (s.grounded) return groundedWithFailover(deps, prompt, s, system);
   return orReasoningWithFailover(deps, s.model_slug, prompt, {
@@ -525,9 +547,18 @@ async function executeSlots(
     const maxAttempts = (capability || grokReasoning) ? 0 : MAX_TIMEOUT_RETRIES;
     let lastMsg = "";
     for (let attempt = 0; attempt <= maxAttempts; attempt++) {
+      const t0 = Date.now();
       try {
         const r = await withTimeout(dispatchSeat(deps, prompt, s, callerSystem), timeoutMs, s.id);
-        return { seat: s, status: "ok" as const, text: r.text, citations: r.citations };
+        return {
+          seat: s,
+          status: "ok" as const,
+          text: r.text,
+          citations: r.citations,
+          transport: r.transport,
+          failover_fired: r.failover_fired,
+          latency_ms: Date.now() - t0,
+        };
       } catch (e) {
         const msg = (e as Error)?.message ?? String(e);
         lastMsg = msg;
@@ -539,11 +570,53 @@ async function executeSlots(
           console.error(`[ask_oracle] seat ${s.id} timed out (${timeoutMs}ms) — timeout retry ${attempt + 1}/${maxAttempts}`);
           continue;
         }
-        return { seat: s, status: timedOut ? ("timeout" as const) : ("error" as const), error: msg };
+        return {
+          seat: s,
+          status: timedOut ? ("timeout" as const) : ("error" as const),
+          error: msg,
+          latency_ms: Date.now() - t0,
+        };
       }
     }
-    return { seat: s, status: "timeout" as const, error: lastMsg }; // unreachable; satisfies TS
+    return { seat: s, status: "timeout" as const, error: lastMsg, latency_ms: timeoutMs }; // unreachable; satisfies TS
   });
+}
+
+function recordOracleMetrics(
+  prompt: string,
+  route: RoutePlan,
+  results: SlotResult[],
+  degraded: boolean,
+): void {
+  const qHash = hashQuestion(prompt);
+  const preview = process.env.METRICS_LOG_PROMPTS === "1" ? prompt : undefined;
+  for (const r of results) {
+    const groundedReq = !!r.seat.grounded;
+    const groundingFired = r.status === "ok" && groundedReq && (r.citations?.length ?? 0) > 0;
+    const xFired = r.status === "ok" && !!r.seat.grok_grounding && (r.citations?.length ?? 0) > 0;
+    const rec: SeatMetricRecord = {
+      ts: new Date().toISOString(),
+      tool: "oracle",
+      route_mode: route.mode,
+      seat_id: r.seat.id,
+      family: familyFromSlug(r.seat.model_slug, r.seat.provider),
+      model_slug: r.seat.model_slug,
+      transport: r.transport ?? (r.seat.provider === "grok-direct" ? "direct" : "or"),
+      grounded_requested: groundedReq,
+      grounding_fired: groundingFired,
+      x_search_fired: xFired,
+      reasoning_effort: r.seat.reasoning_effort,
+      latency_ms: r.latency_ms ?? 0,
+      failover_fired: !!r.failover_fired,
+      timed_out: r.status === "timeout",
+      ok: r.status === "ok",
+      degraded,
+      error_class: classifyError(r.status, r.error),
+      question_hash: qHash,
+      prompt_preview: preview,
+    };
+    void recordSeatMetric(rec);
+  }
 }
 
 // ── §6 assemble ───────────────────────────────────────────────────────────────
@@ -671,14 +744,25 @@ export async function runOracle(
       // (capEffort never RAISES a lower route effort).
       reasoning_effort: capEffort(seats[0]?.reasoning_effort ?? "high", "medium"),
     };
+    const salvageT0 = Date.now();
     try {
       const r = await withTimeout(dispatchSeat(deps, prompt, salvageSeat, ov.system), SLOT_TIMEOUT_MS, salvageSeat.id);
-      results = [...results, { seat: salvageSeat, status: "ok", text: r.text, citations: r.citations }];
+      results = [...results, {
+        seat: salvageSeat,
+        status: "ok",
+        text: r.text,
+        citations: r.citations,
+        transport: r.transport,
+        failover_fired: r.failover_fired,
+        latency_ms: Date.now() - salvageT0,
+      }];
       console.error("[ask_oracle] all seats failed — ungrounded salvage recovered a non-empty answer (degraded).");
     } catch (e) {
       console.error(`[ask_oracle] salvage seat also failed: ${(e as Error)?.message ?? e}`);
     }
   }
+  const degraded = !!classifierError || results.some((r) => r.status !== "ok");
+  recordOracleMetrics(prompt, route, results, degraded);
   return assemble(deps, route, results, ov, !!classifierError);
 }
 
