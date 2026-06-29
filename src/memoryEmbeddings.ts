@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { GoogleGenAI } from "@google/genai";
 import type { MemoryFact } from "./memory.js";
@@ -23,7 +23,12 @@ export async function loadEmbeddings(memoryDir: string): Promise<EmbeddingsStore
 
 export async function saveEmbeddings(memoryDir: string, store: EmbeddingsStore): Promise<void> {
   await mkdir(memoryDir, { recursive: true });
-  await writeFile(embeddingsPath(memoryDir), JSON.stringify(store, null, 0) + "\n", "utf8");
+  // Atomic write: a crash mid-write would otherwise truncate the JSON, and loadEmbeddings
+  // swallows the parse error → {} → silent total loss of every vector. tmp + rename avoids that.
+  const finalPath = embeddingsPath(memoryDir);
+  const tmpPath = finalPath + ".tmp";
+  await writeFile(tmpPath, JSON.stringify(store, null, 0) + "\n", "utf8");
+  await rename(tmpPath, finalPath);
 }
 
 export function embedTextForFact(fact: MemoryFact): string {

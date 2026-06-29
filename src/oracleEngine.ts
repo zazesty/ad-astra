@@ -719,10 +719,13 @@ export async function assemble(
 
   const resp: OracleResponse = { route, slots_status, degraded };
   if (ov.synthesize) {
-    const reasoningOks = oks.filter((r) => !isCapabilitySeat(r.seat));
     // Solo fusion + synthesize → return fusion text directly (it already ran panel+judge).
-    if (reasoningOks.length === 1 && reasoningOks[0].seat.id === "fusion") {
-      resp.answer = reasoningOks[0].text!;
+    // Gate on ALL ok seats, not just reasoning: fusion always REPLACES the whole reasoning
+    // pool, so a reasoning-only check fires even when a capability seat (force_grounding /
+    // force_x) also succeeded — which silently dropped that seat's answer + live citations.
+    // When a capability seat co-succeeds, fall through to synthesize so the judge merges both.
+    if (oks.length === 1 && oks[0].seat.id === "fusion") {
+      resp.answer = oks[0].text!;
     } else {
       resp.answer = oks.length ? await synthesize(deps, route, oks) : "(no seat returned a usable answer)";
     }
@@ -944,8 +947,9 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
           .describe(
             "Fusion tier when engine:\"fusion\". OR picks the panel models + judge per preset (we do not " +
               "hand-pick). general-budget (default) = cheaper panel, frontier judge; general-high = strongest " +
-              "panel; general-fast = latency-homogeneous panel. The resolved outer model in route.models[] is " +
-              "OR's answer-writer for that preset (e.g. claude-opus on general-fast). Ignored unless engine is set.",
+              "panel; general-fast = latency-homogeneous panel. route.models[] shows the literal \"openrouter/fusion\" " +
+              "seat; the resolved outer answer-writer (e.g. claude-opus on general-fast) is OR-internal and logged " +
+              "server-side, not surfaced in the route. Ignored unless engine is set.",
           ),
       },
     },

@@ -65,7 +65,7 @@ export function classifyError(status: string, error?: string): string | undefine
   if (!msg) return status === "ok" ? undefined : "other";
   if (isAttemptTimeoutError(error)) return "timeout";
   if (msg.includes("grounding_fired:false")) return "grounding_miss";
-  if (msg.includes("openrouter") && (msg.includes("429") || msg.includes("5") || msg.includes("transient") || msg.includes("abort") || msg.includes("timeout"))) {
+  if (msg.includes("openrouter") && (msg.includes("429") || /\b5\d{2}\b/.test(msg) || msg.includes("transient") || msg.includes("abort") || msg.includes("timeout"))) {
     return "transient_or";
   }
   if (/\b4\d{2}\b/.test(msg) || msg.includes("400") || msg.includes("401") || msg.includes("403") || msg.includes("404")) {
