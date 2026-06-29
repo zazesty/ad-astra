@@ -5,6 +5,33 @@ import { z } from "zod";
 
 const MEMORY_DIR = process.env.MEMORY_DIR ?? "/root/memory";
 
+/** Verbatim preamble for index.md — survives regeneration. */
+const INDEX_PREAMBLE = `# Memory KB — Index & TOC
+
+Shared, MCP-queryable KB for zaz-astra/grok-mcp/Grok Build.
+Location: /root/memory/ (Claude auto-memory via autoMemoryDirectory setting).
+Tools: memory_search, memory_retrieve, memory_upsert, memory_list.
+Resource: memory://index (no tool call).
+
+**Auto-Update Protocol (for Grok Build + Claude alike):**
+Whoever's turn it is (the active agent) does the extraction at end of substantive turns.
+1. Only after substantive work (new decisions, gotchas, patterns, configs, architecture — not no-ops).
+2. Extract *only the delta* (concise, few-K tokens). Never re-read whole store.
+3. High-confidence only (model judgment: novel + useful + not obvious).
+4. \`memory_search\` first (query + tags) to dedup/check conflicts.
+5. If warranted: \`memory_upsert\` (full tags/related, clean body, no frontmatter).
+6. On conflict: flag in content or via simple status in response; never silent overwrite.
+7. Mirror journaling: usage/substance gated. Cheap. MCP tools are the authority.
+8. Auto-harvest: during upsert, [[slugs]] in body are auto-added to related[].
+
+Use this protocol symmetrically. Both agents have identical access via the MCP.
+
+**NOTE:** \`MEMORY.md\` and \`index.md\` are auto-regenerated on every \`memory_upsert\`
+from each fact's frontmatter ([[memory-system-structure]]). The reliable cron harvester
+trigger is separate — see [[grok-build-auto-update-gates]].
+
+`;
+
 export interface MemoryFact {
   id: string;
   name: string;
@@ -133,7 +160,7 @@ async function listFactFiles(dir: string): Promise<string[]> {
     .map(e => join(dir, e.name));
 }
 
-async function loadAllFacts(dir: string): Promise<MemoryFact[]> {
+export async function loadAllFacts(dir: string): Promise<MemoryFact[]> {
   const files = await listFactFiles(dir);
   const facts: MemoryFact[] = [];
   for (const f of files) {
@@ -141,6 +168,87 @@ async function loadAllFacts(dir: string): Promise<MemoryFact[]> {
     if (fact) facts.push(fact);
   }
   return facts;
+}
+
+function humanizeTitle(fact: MemoryFact): string {
+  const raw = fact.name && fact.name !== fact.id ? fact.name : fact.id;
+  return raw
+    .split("-")
+    .map(w => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
+function normalizeForCompare(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Near-duplicate check for upsert conflict_flag (name or description collision). */
+function detectNearDuplicate(
+  candidate: { id: string; name: string; description: string },
+  facts: MemoryFact[],
+): string | null {
+  const cName = normalizeForCompare(candidate.name);
+  const cDesc = normalizeForCompare(candidate.description || "");
+  for (const f of facts) {
+    if (f.id === candidate.id) continue;
+    if (cName && normalizeForCompare(f.name) === cName) return f.id;
+    if (cDesc.length >= 24 && normalizeForCompare(f.description) === cDesc) return f.id;
+  }
+  return null;
+}
+
+function buildMemoryMd(facts: MemoryFact[]): string {
+  const lines = facts
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map(f => `- [${humanizeTitle(f)}](${f.id}.md) — ${f.description}`);
+  return lines.join("\n") + (lines.length ? "\n" : "");
+}
+
+function buildIndexMd(facts: MemoryFact[]): string {
+  const date = new Date().toISOString().slice(0, 10);
+  const sorted = facts.slice().sort((a, b) => a.id.localeCompare(b.id));
+
+  const byTag = new Map<string, MemoryFact[]>();
+  for (const f of sorted) {
+    const tag = f.tags[0] || "misc";
+    if (!byTag.has(tag)) byTag.set(tag, []);
+    byTag.get(tag)!.push(f);
+  }
+
+  const grouped: string[] = ["## Grouped by primary tag", ""];
+  for (const tag of [...byTag.keys()].sort()) {
+    grouped.push(`### ${tag}`);
+    for (const f of byTag.get(tag)!) {
+      const desc = f.description.length > 100 ? f.description.slice(0, 97) + "..." : f.description;
+      const tagStr = f.tags.join(" ");
+      grouped.push(`- [${f.id}](${f.id}.md) — ${desc}  \`${tagStr}\``);
+    }
+    grouped.push("");
+  }
+
+  const alpha: string[] = ["## Alphabetical", ""];
+  for (const f of sorted) {
+    alpha.push(`- [${f.id}](${f.id}.md) \`${f.tags.join(" ")}\``);
+  }
+
+  return (
+    INDEX_PREAMBLE +
+    `${facts.length} facts. Updated ${date}\n\n` +
+    grouped.join("\n") +
+    "\n" +
+    alpha.join("\n") +
+    "\n"
+  );
+}
+
+/** Regenerate MEMORY.md + index.md from all per-fact files. */
+export async function regenerateIndexes(dir: string): Promise<{ factCount: number }> {
+  await mkdir(dir, { recursive: true });
+  const facts = await loadAllFacts(dir);
+  await writeFile(join(dir, "MEMORY.md"), buildMemoryMd(facts), "utf8");
+  await writeFile(join(dir, "index.md"), buildIndexMd(facts), "utf8");
+  return { factCount: facts.length };
 }
 
 function matchesQuery(fact: MemoryFact, query: string): boolean {
@@ -314,6 +422,7 @@ async function upsertFact(dir: string, input: {
   const front = buildFrontmatter(fact);
   const full = front + fact.content + (fact.content.endsWith("\n") ? "" : "\n");
   await writeFile(filePath, full, "utf8");
+  await regenerateIndexes(dir);
 
   return fact;
 }
@@ -434,10 +543,20 @@ export function registerMemoryTools(server: any) {
     },
     async (input: { id?: string; name: string; description?: string; content: string; tags?: string[]; related?: string[] }) => {
       try {
+        const id = (input.id || input.name).replace(/\.md$/, "");
+        let hadExisting = false;
+        try {
+          await readFile(join(MEMORY_DIR, `${id}.md`), "utf8");
+          hadExisting = true;
+        } catch {}
+
+        const allFacts = await loadAllFacts(MEMORY_DIR);
+        const conflictWith = detectNearDuplicate(
+          { id, name: input.name, description: input.description || "" },
+          allFacts.filter(f => !hadExisting || f.id !== id),
+        );
+
         const fact = await upsertFact(MEMORY_DIR, input);
-        const wasUpdate = !!(await (async () => {
-          try { return await readFact(join(MEMORY_DIR, `${fact.id}.md`)); } catch { return null; }
-        })() ); // simplistic: if file existed before this upsert
         return {
           content: [{
             type: "text",
@@ -447,8 +566,9 @@ export function registerMemoryTools(server: any) {
               updated: fact.updated,
               version: fact.version,
               tags: fact.tags,
-              status: wasUpdate ? "updated_existing" : "created",
-              conflict_flag: false,  // simple flag; set true in future if search detected near-dup before upsert
+              status: hadExisting ? "updated_existing" : "created",
+              conflict_flag: !!conflictWith,
+              conflict_with: conflictWith || undefined,
             }, null, 2)
           }]
         };

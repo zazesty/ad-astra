@@ -70,9 +70,18 @@ export function isTransientError(e: unknown): boolean {
 // 3 total attempts; the backoffs below add ~1.1s worst-case before we give up and
 // (in ask_oracle) fail over to a direct provider — bounded, since seats are
 // concurrent and each carries its own outer timeout.
+export const OR_ATTEMPT_TIMEOUT_MS = 15_000;
+/** newsDigest compression can run longer; still well under capability seat budget. */
+export const OR_NEWS_DIGEST_ATTEMPT_TIMEOUT_MS = 45_000;
 const OR_MAX_ATTEMPTS = 3;
 const OR_BACKOFF_MS = [300, 800];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function isAbortOrTimeout(e: unknown): boolean {
+  const name = (e as Error)?.name ?? "";
+  const msg = String((e as Error)?.message ?? e).toLowerCase();
+  return name === "AbortError" || name === "TimeoutError" || msg.includes("aborted") || msg.includes("timeout");
+}
 
 // Cheap sanity guard: block an absurd single payload so one pathological prompt
 // can't run up input tokens.
@@ -84,6 +93,7 @@ export interface CallGeminiOpts {
   grounded?: boolean;
   reasoning_effort?: "low" | "medium" | "high";
   temperature?: number;
+  attempt_timeout_ms?: number;
   // Structured-output schema for the DIRECT SDK path (a @google/genai `Schema`
   // built with the SDK `Type` enums). When present, callGemini sets
   // responseMimeType:"application/json" + responseSchema — the direct-transport
@@ -184,6 +194,8 @@ export interface CallOpenRouterOpts {
   temperature?: number;
   response_format?: Record<string, unknown>;
   models?: string[];
+  /** Per-attempt fetch abort (default OR_ATTEMPT_TIMEOUT_MS). Timeouts fail fast → failover. */
+  attempt_timeout_ms?: number;
 }
 
 /**
@@ -253,12 +265,12 @@ export async function callOpenRouter(
     );
   }
 
-  // Transient-retry loop: 429/5xx/network/timeout are retried (up to OR_MAX_ATTEMPTS
-  // with backoff); 4xx client errors and post-200 parse failures throw immediately.
-  // The thrown OpenRouterError carries `transient` so ask_oracle can decide whether
-  // to fail over to a direct provider. Grounded search + high reasoning can run long,
-  // so each attempt gets a 120s ceiling (~20x the observed p90); a timeout aborts
-  // that attempt and is treated as transient.
+  // Transient-retry loop: 429/5xx/network are retried (up to OR_MAX_ATTEMPTS with
+  // backoff). TIMEOUT/abort throws immediately (transient) so ask_oracle can fail
+  // over to direct well before the 40s seat cap — do NOT loop OR_MAX_ATTEMPTS on a
+  // hang (3×15s would blow the seat budget and never reach failover). Per-attempt
+  // abort defaults to OR_ATTEMPT_TIMEOUT_MS (~p90×5); callers can override.
+  const attemptTimeoutMs = opts.attempt_timeout_ms ?? OR_ATTEMPT_TIMEOUT_MS;
   for (let attempt = 1; ; attempt++) {
     const t0 = Date.now();
     let res: Response;
@@ -273,15 +285,16 @@ export async function callOpenRouter(
           "X-Title": "grok-mcp",
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(attemptTimeoutMs),
       });
     } catch (e) {
-      // Network/abort-level failure (no HTTP status) — transient by nature.
+      const aborted = isAbortOrTimeout(e);
       const err = new OpenRouterError(
         `OpenRouter /chat/completions network failure: ${(e as Error)?.message ?? e}`,
         undefined,
         true,
       );
+      if (aborted) throw err;
       if (attempt >= OR_MAX_ATTEMPTS) throw err;
       console.error(`[callOpenRouter] transient (network) attempt ${attempt}/${OR_MAX_ATTEMPTS} on ${model} — retrying: ${err.message}`);
       await sleep(OR_BACKOFF_MS[attempt - 1] ?? 800);

@@ -5,7 +5,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node build/index.js",
-    "test": "node test/grokXSearch.test.mjs && node test/geminiCore.test.mjs && node test/newsDigest.test.mjs && node test/oracleClassifier.test.mjs && node test/oracleEngine.test.mjs",
+    "test": "node test/grokXSearch.test.mjs && node test/geminiCore.test.mjs && node test/callOpenRouter-timeout.test.mjs && node test/newsDigest.test.mjs && node test/oracleClassifier.test.mjs && node test/oracleEngine.test.mjs && node test/memory.test.mjs",
     "test:integration": "RUN_INTEGRATION=1 node test/grokXSearch.test.mjs"
   },
   "dependencies": {

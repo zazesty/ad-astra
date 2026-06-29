@@ -27,7 +27,13 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import Parser from "rss-parser";
-import { callGemini, callGeminiViaOpenRouter, makeGeminiClient, type GeminiTransport } from "./geminiCore.js";
+import {
+  callGemini,
+  callGeminiViaOpenRouter,
+  makeGeminiClient,
+  OR_NEWS_DIGEST_ATTEMPT_TIMEOUT_MS,
+  type GeminiTransport,
+} from "./geminiCore.js";
 import { callGrok } from "./grokCore.js";
 import { sendEmail } from "./email.js";
 
@@ -395,7 +401,12 @@ export type SummarizeDeps = {
 
 /** Summarize via Gemini (ungrounded — feeds are the only source), fall back to Grok. */
 export async function summarize(userPrompt: string, deps: SummarizeDeps): Promise<{ markdown: string; engine: string }> {
-  const geminiOpts = { system: COMPRESSION_SYSTEM, grounded: false, reasoning_effort: "high" as const };
+  const geminiOpts = {
+    system: COMPRESSION_SYSTEM,
+    grounded: false,
+    reasoning_effort: "high" as const,
+    attempt_timeout_ms: OR_NEWS_DIGEST_ATTEMPT_TIMEOUT_MS,
+  };
   // Try Gemini first (matches ask_panel's transport selection).
   try {
     const r =

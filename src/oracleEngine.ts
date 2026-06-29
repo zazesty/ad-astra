@@ -407,6 +407,21 @@ async function groundedWithFailover(
   try {
     return await groundedWithRetry(orOnce, s.id, "or-native");
   } catch (e) {
+    const groundingMiss =
+      e instanceof Error && e.message.includes("grounding_fired:false");
+    if (groundingMiss) {
+      console.error(
+        `[ask_oracle] OR grounding miss on seat ${s.id} — failover → direct-gemini grounding`,
+      );
+      const client = makeGeminiClient(deps.geminiApiKey);
+      const directOnce = () =>
+        callGemini(client, prompt, {
+          system,
+          reasoning_effort: s.reasoning_effort,
+          grounded: true,
+        });
+      return groundedWithRetry(directOnce, s.id, "direct-grounding-miss");
+    }
     if (!isTransientError(e)) throw e;
     console.error(`[ask_oracle] OR transient fail on grounded seat ${s.id} — failover → direct-gemini grounding: ${(e as Error).message}`);
     const client = makeGeminiClient(deps.geminiApiKey);
