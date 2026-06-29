@@ -872,7 +872,11 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         "for you. To name the exact model per seat, or set per-member grounding/temperature/lens, use " +
         "ask_panel (those are its job, not overrides here). The remaining overrides are all auto-routing " +
         "assistance (capabilities, effort, lens, panel size, caller-family exclusion) and are optional, " +
-        "superseding the classifier.",
+        "superseding the classifier. " +
+        "FUSION (`engine:\"fusion\"`) is a deliberate ESCALATION — use ONLY when the question is genuinely " +
+        "contested (real tradeoffs, expert disagreement, high cost of being wrong). Do NOT use Fusion for " +
+        "tactical, factual, or single-path prompts the default panel handles fine; it runs OR's full internal " +
+        "multi-model panel+judge (~40–120s, multi-seat cost). Default path = classifier + diversity pool.",
       inputSchema: {
         prompt: z
           .string()
@@ -926,11 +930,23 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         engine: z
           .enum(["fusion"])
           .optional()
-          .describe("Opt-in reasoning engine. \"fusion\" runs OpenRouter's multi-model Fusion panel+judge as a single seat, REPLACING the normal reasoning pool (not a synthesizer on top). Higher cost/latency — use for hard/contested questions. Capability seats (force_x, force_grounding, classifier-flagged) still run first."),
+          .describe(
+            "Opt-in ESCALATION only — NOT the default path. Set \"fusion\" ONLY for genuinely CONTESTED " +
+              "questions: real tradeoffs, credible expert disagreement, or where being wrong is expensive " +
+              "(policy, strategy, ambiguous evidence). Skip for tactical lookups, simple facts, or prompts " +
+              "a normal panel answers cleanly. Runs OpenRouter Fusion as one seat REPLACING the reasoning pool " +
+              "(internal multi-model panel + judge, then final answer) — ~40–120s, multi-seat cost. " +
+              "Capability seats (force_x, force_grounding, classifier-flagged) still run first.",
+          ),
         fusion_preset: z
           .enum(["general-budget", "general-high", "general-fast"])
           .optional()
-          .describe("Fusion panel tier when engine:\"fusion\". Default general-budget (cheaper panel, frontier judge). general-high = strongest all-round panel; general-fast = latency-homogeneous panel. Ignored unless engine is set."),
+          .describe(
+            "Fusion tier when engine:\"fusion\". OR picks the panel models + judge per preset (we do not " +
+              "hand-pick). general-budget (default) = cheaper panel, frontier judge; general-high = strongest " +
+              "panel; general-fast = latency-homogeneous panel. The resolved outer model in route.models[] is " +
+              "OR's answer-writer for that preset (e.g. claude-opus on general-fast). Ignored unless engine is set.",
+          ),
       },
     },
     async (args: {
