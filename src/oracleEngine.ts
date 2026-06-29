@@ -25,6 +25,7 @@ import {
   makeGeminiClient,
   isTransientError,
   DEFAULT_OPENROUTER_GEMINI_MODEL,
+  type FusionPreset,
 } from "./geminiCore.js";
 import { applyLens, buildLensMenu } from "./lenses.js";
 import {
@@ -42,7 +43,10 @@ import {
   type SeatMetricRecord,
 } from "./metrics.js";
 
-export type { Effort };
+export type { Effort, FusionPreset };
+
+export const FUSION_MODEL_SLUG = "openrouter/fusion";
+export const DEFAULT_FUSION_PRESET: FusionPreset = "general-budget";
 
 export interface OracleDeps {
   xaiApiKey?: string;
@@ -63,6 +67,8 @@ export interface OracleOverrides {
   force_grounding?: boolean; // force a grounded-Gemini seat (Google-native via OR)
   synthesize?: boolean;     // true → merge into one answer (headless callers); default raw
   exclude_family?: string;  // "grok" → drop same-family REASONING seats (Grok-caller case; see grokCallerPool)
+  engine?: "fusion";        // opt-in OR Fusion reasoning engine (replaces reasoning pool)
+  fusion_preset?: FusionPreset; // fusion panel tier; ignored unless engine:"fusion"
 }
 
 export type SeatProvider = "grok-direct" | "openrouter";
@@ -75,6 +81,7 @@ export interface Seat {
   reasoning_effort: Effort;
   grok_grounding?: "auto" | "required"; // grok-direct ONLY — maps 1:1 to callGrok
   grounded?: boolean;                    // OR gemini slug ONLY — native web plugin
+  fusion_preset?: FusionPreset;          // fusion seat ONLY — OR plugin preset
 }
 
 export interface RoutePlan {
@@ -90,6 +97,8 @@ export interface RoutePlan {
   classifier_error?: string;
   domains?: string[];
   rationale: string;
+  engine?: "fusion";
+  fusion_preset?: FusionPreset;
 }
 
 export interface SlotStatus {
@@ -246,6 +255,19 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   if (c.needs_grounding || ov.force_grounding) {
     seats.push({ id: "gemini-grounded", provider: "openrouter", model_slug: GEMINI_PRO_SLUG, lens, reasoning_effort: effort, grounded: true });
   }
+  // Fusion engine: one OR Fusion seat replaces the reasoning pool (§6a). Capability
+  // seats above are kept; panel_size / exclude_family are ignored on this path.
+  if (ov.engine === "fusion") {
+    seats.push({
+      id: "fusion",
+      provider: "openrouter",
+      model_slug: FUSION_MODEL_SLUG,
+      lens,
+      reasoning_effort: effort,
+      fusion_preset: ov.fusion_preset ?? DEFAULT_FUSION_PRESET,
+    });
+    return seats;
+  }
   // seat count = max(requested, #capability seats, 1) — capabilities win
   const want = ov.n ?? c.suggested_panel_n ?? 1;
   const target = Math.max(want, seats.length, 1);
@@ -272,6 +294,7 @@ function resolvedModelId(s: Seat): string {
 }
 
 function tagsFor(s: Seat): string[] {
+  if (s.model_slug === FUSION_MODEL_SLUG) return ["fusion"];
   const head = s.provider === "grok-direct" ? "grok" : /gemini/i.test(s.model_slug) ? "gemini" : s.model_slug;
   const tags = [head];
   if (s.grok_grounding) tags.push("x_search");
@@ -321,6 +344,9 @@ const GROK_REASONING_TIMEOUT_MS = 60_000;
 // 2026-06-24 while reasoning seats finished) — and a dropped capability seat is the
 // one we LEAST want to lose. Give them a wider budget that fits the retry chain.
 const CAPABILITY_SLOT_TIMEOUT_MS = 60_000;
+// OR Fusion runs an internal panel + judge — budget matches locked v1 (120s seat / 110s fetch).
+const FUSION_SLOT_TIMEOUT_MS = 120_000;
+const FUSION_OR_ATTEMPT_TIMEOUT_MS = 110_000;
 // 1 retry (= 2 grounded calls). ask_panel uses 2, but oracle differs deliberately:
 // (a) a 3-call chain at high effort can stall past the 60s capability budget (a single
 // slow grounded call → seat timeout, see Grok find 2026-06-25), and (b) oracle has the
@@ -337,6 +363,7 @@ const MAX_GROUNDING_RETRIES = 1;
 const MAX_TIMEOUT_RETRIES = 1;
 
 const isCapabilitySeat = (s: Seat): boolean => !!s.grok_grounding || !!s.grounded;
+const isFusionSeat = (s: Seat): boolean => s.model_slug === FUSION_MODEL_SLUG;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let t: ReturnType<typeof setTimeout>;
@@ -487,6 +514,25 @@ async function orReasoningWithFailover(
   }
 }
 
+/** OR Fusion seat — no failover, no timeout retry, tool_choice required (§6a). */
+async function fusionDispatch(
+  deps: OracleDeps,
+  prompt: string,
+  s: Seat,
+  callerSystem?: string,
+): Promise<DispatchOutcome> {
+  const { system, error } = applyLens(s.lens, callerSystem);
+  if (error) throw new Error(error);
+  const r = await callOpenRouter(deps.openrouterApiKey, FUSION_MODEL_SLUG, prompt, {
+    system,
+    reasoning_effort: s.reasoning_effort,
+    fusion_preset: s.fusion_preset ?? DEFAULT_FUSION_PRESET,
+    tool_choice: "required",
+    attempt_timeout_ms: FUSION_OR_ATTEMPT_TIMEOUT_MS,
+  });
+  return { text: r.text, citations: r.citations, transport: "or", failover_fired: false };
+}
+
 async function dispatchSeat(
   deps: OracleDeps,
   prompt: string,
@@ -512,6 +558,7 @@ async function dispatchSeat(
     return { text: r.text, citations: r.citations, transport: "direct", failover_fired: false };
   }
   if (s.grounded) return groundedWithFailover(deps, prompt, s, system);
+  if (isFusionSeat(s)) return fusionDispatch(deps, prompt, s, callerSystem);
   return orReasoningWithFailover(deps, s.model_slug, prompt, {
     system,
     reasoning_effort: s.reasoning_effort,
@@ -526,10 +573,12 @@ async function executeSlots(
 ): Promise<SlotResult[]> {
   return mapLimit(seats, CONCURRENCY, async (s) => {
     const capability = isCapabilitySeat(s);
+    const fusion = isFusionSeat(s);
     const grokReasoning = s.provider === "grok-direct" && !capability;
     // Grok-direct reasoning seats get a wider budget (xAI high-effort reasoning
     // routinely exceeds 40s — see GROK_REASONING_TIMEOUT_MS).
-    const timeoutMs = capability ? CAPABILITY_SLOT_TIMEOUT_MS
+    const timeoutMs = fusion ? FUSION_SLOT_TIMEOUT_MS
+      : capability ? CAPABILITY_SLOT_TIMEOUT_MS
       : grokReasoning ? GROK_REASONING_TIMEOUT_MS
       : SLOT_TIMEOUT_MS;
     // Timeout-retry applies to REASONING seats only. A capability seat already runs
@@ -544,7 +593,7 @@ async function executeSlots(
     // call → guaranteed second timeout → ~2×latency before salvage, no benefit
     // (Grok find 2026-06-26). OR reasoning (auto/gemini) keeps its 1 retry — a
     // timeout there is more plausibly transient.
-    const maxAttempts = (capability || grokReasoning) ? 0 : MAX_TIMEOUT_RETRIES;
+    const maxAttempts = (capability || grokReasoning || fusion) ? 0 : MAX_TIMEOUT_RETRIES;
     let lastMsg = "";
     for (let attempt = 0; attempt <= maxAttempts; attempt++) {
       const t0 = Date.now();
@@ -670,7 +719,13 @@ export async function assemble(
 
   const resp: OracleResponse = { route, slots_status, degraded };
   if (ov.synthesize) {
-    resp.answer = oks.length ? await synthesize(deps, route, oks) : "(no seat returned a usable answer)";
+    const reasoningOks = oks.filter((r) => !isCapabilitySeat(r.seat));
+    // Solo fusion + synthesize → return fusion text directly (it already ran panel+judge).
+    if (reasoningOks.length === 1 && reasoningOks[0].seat.id === "fusion") {
+      resp.answer = reasoningOks[0].text!;
+    } else {
+      resp.answer = oks.length ? await synthesize(deps, route, oks) : "(no seat returned a usable answer)";
+    }
   } else {
     resp.raw = oks.map((r) => ({
       id: r.seat.id,
@@ -721,8 +776,14 @@ export async function runOracle(
     classification = fallbackClassification(prompt);
   }
 
+  if (ov.engine === "fusion") source = "override";
+
   const seats = buildSlots(classification, ov);
   const route = buildRoutePlan(seats, classification, source, classifierModel, classifierError);
+  if (ov.engine === "fusion") {
+    route.engine = "fusion";
+    route.fusion_preset = ov.fusion_preset ?? DEFAULT_FUSION_PRESET;
+  }
   let results = await executeSlots(deps, prompt, seats, ov.system);
 
   // Salvage net: if EVERY seat failed — the lone grounded-only route failing loud
@@ -861,7 +922,15 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         exclude_family: z
           .string()
           .optional()
-          .describe("Drop same-FAMILY reasoning seats when the CALLER is that family, so a model doesn't consult itself. Pass \"grok\" when Grok is the caller: the contrarian grok-direct reasoning seat is replaced by genuine cross-family dissent — gemini → gpt-5.5 → openrouter/auto (for 1/2/3+ seats). Capability seats (live-X, grounding) are EXEMPT — a grok-x seat is data retrieval, not Grok's opinion, so it stays. Only \"grok\" is meaningful today."),
+          .describe("Drop same-FAMILY reasoning seats when the CALLER is that family, so a model doesn't consult itself. Pass \"grok\" when Grok is the caller: the contrarian grok-direct reasoning seat is replaced by genuine cross-family dissent — gemini → gpt-5.5 → openrouter/auto (for 1/2/3+ seats). Capability seats (live-X, grounding) are EXEMPT — a grok-x seat is data retrieval, not Grok's opinion, so it stays. Only \"grok\" is meaningful today. Ignored when engine:\"fusion\"."),
+        engine: z
+          .enum(["fusion"])
+          .optional()
+          .describe("Opt-in reasoning engine. \"fusion\" runs OpenRouter's multi-model Fusion panel+judge as a single seat, REPLACING the normal reasoning pool (not a synthesizer on top). Higher cost/latency — use for hard/contested questions. Capability seats (force_x, force_grounding, classifier-flagged) still run first."),
+        fusion_preset: z
+          .enum(["general-budget", "general-high", "general-fast"])
+          .optional()
+          .describe("Fusion panel tier when engine:\"fusion\". Default general-budget (cheaper panel, frontier judge). general-high = strongest all-round panel; general-fast = latency-homogeneous panel. Ignored unless engine is set."),
       },
     },
     async (args: {
@@ -875,6 +944,8 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
       force_x?: boolean;
       force_grounding?: boolean;
       exclude_family?: string;
+      engine?: "fusion";
+      fusion_preset?: FusionPreset;
     }) => {
       try {
         const result = await runOracle(deps, args.prompt, {
@@ -887,6 +958,8 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
           force_x: args.force_x,
           force_grounding: args.force_grounding,
           exclude_family: args.exclude_family,
+          engine: args.engine,
+          fusion_preset: args.fusion_preset,
         });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       } catch (err) {

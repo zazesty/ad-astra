@@ -187,6 +187,8 @@ export function extractDirectCitations(resp: any): string[] {
  * on error/unavailable/rate-limit fall to [1]…) for hardening a seat against a
  * single model being down (ask_oracle §0). Neither is gemini-specific.
  */
+export type FusionPreset = "general-budget" | "general-high" | "general-fast";
+
 export interface CallOpenRouterOpts {
   system?: string;
   grounded?: boolean;
@@ -194,6 +196,10 @@ export interface CallOpenRouterOpts {
   temperature?: number;
   response_format?: Record<string, unknown>;
   models?: string[];
+  /** OpenRouter Fusion plugin preset (ask_oracle engine:fusion). */
+  fusion_preset?: FusionPreset;
+  /** Force tool invocation — fusion seats pass "required" so OR cannot skip deliberation. */
+  tool_choice?: "required" | "auto" | "none";
   /** Per-attempt fetch abort (default OR_ATTEMPT_TIMEOUT_MS). Timeouts fail fast → failover. */
   attempt_timeout_ms?: number;
 }
@@ -253,7 +259,9 @@ export async function callOpenRouter(
   if (opts.models?.length) body.models = opts.models;
   // engine:"native" = the model's built-in Google Search grounding through the
   // gateway (same index/sources as the direct path). Never Exa. Gemini only.
-  if (opts.grounded && isGemini) {
+  if (opts.fusion_preset) {
+    body.plugins = [{ id: "fusion", preset: opts.fusion_preset }];
+  } else if (opts.grounded && isGemini) {
     body.plugins = [{ id: "web", engine: "native" }];
   } else if (opts.grounded) {
     // Fail-loud, not fail-silent: a grounded request on a non-gemini slug would
@@ -264,6 +272,7 @@ export async function callOpenRouter(
         `x_search seat or a gemini grounded seat instead.`,
     );
   }
+  if (opts.tool_choice) body.tool_choice = opts.tool_choice;
 
   // Transient-retry loop: 429/5xx/network are retried (up to OR_MAX_ATTEMPTS with
   // backoff). TIMEOUT/abort throws immediately (transient) so ask_oracle can fail

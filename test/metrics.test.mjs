@@ -30,6 +30,7 @@ console.log("Unit: metrics");
 check("hashQuestion stable", hashQuestion("hello").length === 16);
 check("familyFromSlug grok", familyFromSlug("grok", "grok-direct") === "grok");
 check("familyFromSlug gemini", familyFromSlug("~google/gemini-pro-latest") === "gemini");
+check("familyFromSlug fusion", familyFromSlug("openrouter/fusion") === "fusion");
 check("classifyError timeout", classifyError("timeout", "seat timed out") === "timeout");
 check("classifyError grounding", classifyError("error", "grounding_fired:false") === "grounding_miss");
 

@@ -2,7 +2,14 @@
  * Unit tests for ask_oracle's routing logic — buildSlots / capEffort /
  * buildRoutePlan. Pure, no network. Run after `npm run build`.
  */
-import { buildSlots, capEffort, buildRoutePlan, assemble } from "../build/oracleEngine.js";
+import {
+  buildSlots,
+  capEffort,
+  buildRoutePlan,
+  assemble,
+  FUSION_MODEL_SLUG,
+  DEFAULT_FUSION_PRESET,
+} from "../build/oracleEngine.js";
 
 let passed = 0,
   failed = 0;
@@ -168,6 +175,59 @@ console.log("\nUnit: buildRoutePlan");
   const s = buildSlots(C(), {});
   const r = buildRoutePlan(s, C(), "prefilter", null, "boom");
   ok(r.source === "prefilter" && r.classifier_model === null && r.classifier_error === "boom", "fallback route carries classifier_error + null model");
+}
+
+console.log("\nUnit: buildSlots — engine:fusion");
+{
+  const s = buildSlots(C(), { engine: "fusion" });
+  ok(s.length === 1 && s[0].id === "fusion", "fusion engine → single fusion seat");
+  ok(s[0].model_slug === FUSION_MODEL_SLUG, "fusion seat uses openrouter/fusion slug");
+  ok(s[0].fusion_preset === DEFAULT_FUSION_PRESET, "default fusion_preset is general-budget");
+}
+{
+  const s = buildSlots(C({ suggested_panel_n: 4 }), { engine: "fusion", n: 4, exclude_family: "grok" });
+  ok(s.length === 1 && s[0].id === "fusion", "fusion ignores panel_size and exclude_family");
+}
+{
+  const s = buildSlots(C(), { engine: "fusion", fusion_preset: "general-high" });
+  ok(s[0].fusion_preset === "general-high", "fusion_preset override honored on seat");
+}
+{
+  const s = buildSlots(C({ needs_x: true }), { engine: "fusion", force_grounding: true });
+  ok(s.length === 3, "fusion + both capabilities → 2 capability + 1 fusion");
+  ok(s.some((x) => x.id === "grok-x") && s.some((x) => x.id === "gemini-grounded"), "capability seats kept with fusion");
+  ok(s[s.length - 1].id === "fusion", "fusion seat trails capabilities");
+}
+{
+  const s = buildSlots(C(), {});
+  ok(s.length === 1 && s[0].id === "auto", "default path unchanged without engine:fusion");
+}
+
+console.log("\nUnit: assemble — fusion synthesize + tags");
+{
+  const fusionSeat = {
+    id: "fusion",
+    provider: "openrouter",
+    model_slug: FUSION_MODEL_SLUG,
+    lens: "default",
+    reasoning_effort: "high",
+  };
+  const route = { mode: "single", models: [FUSION_MODEL_SLUG], lens: "default", reasoning_effort: "high", used_x_search: false, used_grounding: false, panel_n: 1, source: "override", classifier_model: null, rationale: "r", engine: "fusion", fusion_preset: "general-budget" };
+  const resp = await assemble({}, route, [{ seat: fusionSeat, status: "ok", text: "fusion answer" }], { synthesize: true }, false);
+  ok(resp.answer === "fusion answer", "solo fusion + synthesize skips gemini judge");
+  ok(!resp.raw, "synthesize path does not return raw");
+}
+{
+  const fusionSeat = {
+    id: "fusion",
+    provider: "openrouter",
+    model_slug: FUSION_MODEL_SLUG,
+    lens: "default",
+    reasoning_effort: "high",
+  };
+  const route = { mode: "single", models: [FUSION_MODEL_SLUG], lens: "default", reasoning_effort: "high", used_x_search: false, used_grounding: false, panel_n: 1, source: "override", classifier_model: null, rationale: "r" };
+  const resp = await assemble({}, route, [{ seat: fusionSeat, status: "ok", text: "t" }], {}, false);
+  ok(resp.raw?.[0]?.tags?.includes("fusion"), "fusion seat tagged fusion in raw output");
 }
 
 console.log("\nUnit: assemble — REALIZED capability flags (route reflects what fired)");

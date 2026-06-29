@@ -42,6 +42,7 @@ export function hashQuestion(prompt: string): string {
 
 export function familyFromSlug(modelSlug: string, provider?: string): string {
   const s = modelSlug.toLowerCase();
+  if (s.includes("fusion")) return "fusion";
   if (s === "grok" || provider === "grok-direct" || s.includes("grok")) return "grok";
   if (s.includes("gemini")) return "gemini";
   if (s.includes("gpt") || s.includes("openai")) return "openai";
