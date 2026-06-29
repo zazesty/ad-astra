@@ -11,6 +11,7 @@ import {
   hashQuestion,
   familyFromSlug,
   classifyError,
+  isAttemptTimeoutError,
 } from "../build/metrics.js";
 
 let pass = 0;
@@ -32,6 +33,8 @@ check("familyFromSlug grok", familyFromSlug("grok", "grok-direct") === "grok");
 check("familyFromSlug gemini", familyFromSlug("~google/gemini-pro-latest") === "gemini");
 check("familyFromSlug fusion", familyFromSlug("openrouter/fusion") === "fusion");
 check("classifyError timeout", classifyError("timeout", "seat timed out") === "timeout");
+check("classifyError OR abort", classifyError("error", "OpenRouter /chat/completions network failure: The operation was aborted") === "timeout");
+check("isAttemptTimeoutError abort", isAttemptTimeoutError("OpenRouter /chat/completions network failure: aborted") === true);
 check("classifyError grounding", classifyError("error", "grounding_fired:false") === "grounding_miss");
 
 const stateDir = await mkdtemp(join(tmpdir(), "metrics-test-"));

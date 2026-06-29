@@ -28,8 +28,13 @@ import {
   classifyError,
   familyFromSlug,
   hashQuestion,
+  isAttemptTimeoutError,
   recordSeatMetric,
 } from "./metrics.js";
+
+// Grounded gemini on OR can exceed the global 15s per-attempt abort (PK data hit
+// exactly 15s and failed). Panel-only — ungrounded stays at OR_ATTEMPT_TIMEOUT_MS.
+const PANEL_GROUNDED_OR_ATTEMPT_TIMEOUT_MS = 60_000;
 
 type RegisterOpts = {
   xaiApiKey: string | undefined;
@@ -209,6 +214,9 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           grounded: spec.grounded,
           reasoning_effort: spec.reasoning_effort,
           temperature: spec.temperature,
+          ...(spec.grounded && geminiTransport === "openrouter"
+            ? { attempt_timeout_ms: PANEL_GROUNDED_OR_ATTEMPT_TIMEOUT_MS }
+            : {}),
         };
         const callGeminiOnce = () =>
           geminiTransport === "openrouter"
@@ -257,7 +265,8 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           return { text: r.text, citations: r.citations };
         } catch (e) {
           const msg = (e as Error)?.message ?? String(e);
-          record(false, { error: msg, transport, timed_out: /timed out/i.test(msg) });
+          const timedOut = isAttemptTimeoutError(msg);
+          record(false, { error: msg, transport, timed_out: timedOut });
           throw e;
         }
       });

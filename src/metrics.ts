@@ -50,10 +50,20 @@ export function familyFromSlug(modelSlug: string, provider?: string): string {
   return "other";
 }
 
+/** True when an error message looks like a fetch/AbortSignal seat timeout (not a 429/5xx). */
+export function isAttemptTimeoutError(error?: string): boolean {
+  const msg = (error || "").toLowerCase();
+  return (
+    /timed out|timeouterror|signal timed out|aborterror/.test(msg) ||
+    (msg.includes("openrouter") && msg.includes("aborted"))
+  );
+}
+
 export function classifyError(status: string, error?: string): string | undefined {
   if (status === "timeout") return "timeout";
   const msg = (error || "").toLowerCase();
   if (!msg) return status === "ok" ? undefined : "other";
+  if (isAttemptTimeoutError(error)) return "timeout";
   if (msg.includes("grounding_fired:false")) return "grounding_miss";
   if (msg.includes("openrouter") && (msg.includes("429") || msg.includes("5") || msg.includes("transient") || msg.includes("abort") || msg.includes("timeout"))) {
     return "transient_or";
