@@ -9,6 +9,7 @@ import {
   loadEmbeddings,
   saveEmbeddings,
 } from "./memoryEmbeddings.js";
+import { withTimeout } from "./timeouts.js";
 
 const MEMORY_DIR = process.env.MEMORY_DIR ?? "/root/memory";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -318,15 +319,25 @@ async function searchFacts(
   const query = (opts.query || "").trim();
   const limit = Math.min(opts.limit ?? 10, 50);
 
-  let ranked: { fact: MemoryFact; score: number }[];
+  let ranked: { fact: MemoryFact; score: number; kw?: number; sem?: number }[];
 
   if (query) {
     const embeddings = await loadEmbeddings(dir);
     let queryVec: number[] | null = null;
+    // A3: embed has a hard timeout → fall back to keyword-only (no hang).
     if (GEMINI_API_KEY) {
-      queryVec = await embedFactText(GEMINI_API_KEY, query);
+      try {
+        queryVec = await withTimeout(embedFactText(GEMINI_API_KEY, query), 8_000, "memory_search embed");
+      } catch (e) {
+        console.error(`[memory_search] embed timed out/failed — keyword-only: ${(e as Error)?.message ?? e}`);
+        queryVec = null;
+      }
     }
 
+    // A2: semantic floor — cosine is almost always >0 once vectors exist, so
+    // score>0 alone returned "limit" irrelevant facts. Require real keyword hit
+    // OR semantic similarity above threshold.
+    const SEM_FLOOR = 0.55;
     ranked = tagFiltered.map((fact) => {
       const kw = keywordScore(fact, query);
       let sem = 0;
@@ -334,12 +345,11 @@ async function searchFacts(
       if (queryVec && vec?.length) {
         sem = cosineSimilarity(queryVec, vec);
       }
-      // Hybrid: semantic rank within tag filter, keyword as boost + fallback floor.
       const score = sem * 10 + kw;
-      return { fact, score };
+      return { fact, score, kw, sem };
     });
     ranked = ranked
-      .filter((r) => r.score > 0)
+      .filter((r) => (r.kw ?? 0) > 0 || (r.sem ?? 0) > SEM_FLOOR)
       .sort((a, b) => b.score - a.score || (b.fact.updated || "").localeCompare(a.fact.updated || ""));
   } else {
     ranked = tagFiltered
@@ -364,7 +374,8 @@ async function searchFacts(
       for (const rid of f.related || []) {
         if (!seen.has(rid)) {
           const rf = all.find(ff => ff.id === rid);
-          if (rf) {
+          // D1: honor include_archived on expand_related
+          if (rf && (opts.include_archived || isActiveFact(rf))) {
             extra.push({
               id: rf.id,
               name: rf.name,

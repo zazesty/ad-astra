@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
 
-export type MetricsTool = "oracle" | "panel";
+export type MetricsTool = "oracle" | "panel" | "research_fanout";
 
 export interface SeatMetricRecord {
   ts: string;
@@ -250,9 +250,9 @@ export function registerGetMetrics(server: any) {
           .optional()
           .describe("Grouping dimension (default family)."),
         tool: z
-          .enum(["oracle", "panel"])
+          .enum(["oracle", "panel", "research_fanout"])
           .optional()
-          .describe("Filter to ask_oracle or ask_panel seats only."),
+          .describe("Filter to ask_oracle, ask_panel, or research_fanout seats only."),
       },
     },
     async (args: {

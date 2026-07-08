@@ -18,7 +18,7 @@
  */
 
 import { z } from "zod";
-import { callGrok, type Grounding } from "./grokCore.js";
+import { callGrok, DEFAULT_MODEL, type Grounding } from "./grokCore.js";
 import {
   callOpenRouter,
   callGemini,
@@ -42,6 +42,7 @@ import {
   recordSeatMetric,
   type SeatMetricRecord,
 } from "./metrics.js";
+import { withTimeout } from "./timeouts.js";
 
 export type { Effort, FusionPreset };
 
@@ -289,7 +290,9 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
 
 // grok-x's placeholder "grok" → the server default model id; strip OR's x-ai/ ns.
 function resolvedModelId(s: Seat): string {
-  if (s.provider === "grok-direct") return s.model_slug === "grok" ? "grok-4.5" : s.model_slug.replace(/^x-ai\//, "");
+  if (s.provider === "grok-direct") {
+    return s.model_slug === "grok" ? DEFAULT_MODEL : s.model_slug.replace(/^x-ai\//, "");
+  }
   return s.model_slug;
 }
 
@@ -364,14 +367,6 @@ const MAX_TIMEOUT_RETRIES = 1;
 
 const isCapabilitySeat = (s: Seat): boolean => !!s.grok_grounding || !!s.grounded;
 const isFusionSeat = (s: Seat): boolean => s.model_slug === FUSION_MODEL_SLUG;
-
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  let t: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, rej) => {
-    t = setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms);
-  });
-  return Promise.race([p.finally(() => clearTimeout(t)), timeout]);
-}
 
 /** Concurrency-capped map that never rejects — each item resolves to its own
  *  result (errors are caught into the SlotResult), order preserved. */

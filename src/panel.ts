@@ -31,10 +31,15 @@ import {
   isAttemptTimeoutError,
   recordSeatMetric,
 } from "./metrics.js";
+import { seatBudgetMs, withTimeout } from "./timeouts.js";
 
 // Grounded gemini on OR can exceed the global 15s per-attempt abort (PK data hit
 // exactly 15s and failed). Panel-only — ungrounded stays at OR_ATTEMPT_TIMEOUT_MS.
 const PANEL_GROUNDED_OR_ATTEMPT_TIMEOUT_MS = 60_000;
+// A1: outer wall-clock so one stuck grounded seat cannot hold the whole panel
+// until client timeout discards siblings. Per-seat cap still applies via seatBudgetMs.
+const PANEL_OUTER_BUDGET_MS = 70_000;
+const PANEL_SEAT_CAP_MS = 60_000;
 
 type RegisterOpts = {
   xaiApiKey: string | undefined;
@@ -142,6 +147,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       },
     },
     async ({ specs }: { specs: z.infer<typeof specSchema>[] }) => {
+      const panelT0 = Date.now();
       const settled = await mapLimit(specs, CONCURRENCY, async (spec, idx) => {
         const t0 = Date.now();
         const label = spec.label ?? spec.model;
@@ -184,9 +190,18 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           });
         };
 
+        const budget = seatBudgetMs(panelT0, PANEL_OUTER_BUDGET_MS, PANEL_SEAT_CAP_MS);
+        if (budget < 500) {
+          const msg = `${seatId} timed out after 0ms (panel outer budget exhausted)`;
+          record(false, { error: msg, transport: defaultTransport, timed_out: true });
+          throw new Error(msg);
+        }
+
         // Outer try wraps applyLens + provider call so lens-config failures are
         // visible to metrics (B2). Provider paths record success/failure; outer
         // catch is a safety net (lens errors, unexpected throws).
+        // A1: whole seat raced against remaining outer budget so siblings can return.
+        const runSeat = async () => {
         try {
           // Resolve lens → effective system per spec (default second-opinion frame
           // auto-applies when neither lens nor system is given; pass lens:"none" to opt out).
@@ -293,6 +308,16 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             transport: defaultTransport,
             timed_out: isAttemptTimeoutError(msg),
           });
+          throw e;
+        }
+        };
+
+        try {
+          return await withTimeout(runSeat(), budget, seatId);
+        } catch (e) {
+          const msg = (e as Error)?.message ?? String(e);
+          const timedOut = isAttemptTimeoutError(msg);
+          record(false, { error: msg, transport: defaultTransport, timed_out: timedOut });
           throw e;
         }
       });
