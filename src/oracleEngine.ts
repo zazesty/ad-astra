@@ -289,7 +289,7 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
 
 // grok-x's placeholder "grok" → the server default model id; strip OR's x-ai/ ns.
 function resolvedModelId(s: Seat): string {
-  if (s.provider === "grok-direct") return s.model_slug === "grok" ? "grok-4.3" : s.model_slug.replace(/^x-ai\//, "");
+  if (s.provider === "grok-direct") return s.model_slug === "grok" ? "grok-4.5" : s.model_slug.replace(/^x-ai\//, "");
   return s.model_slug;
 }
 
@@ -335,7 +335,7 @@ const CONCURRENCY = 5;
 // ceiling. Concurrent seats mean this only raises worst-case wall-clock, not sum.
 const SLOT_TIMEOUT_MS = 40_000; // plain reasoning seats (openrouter/auto, gemini)
 // Grok-DIRECT reasoning seats (high effort, ungrounded). xAI reasoning latency now
-// routinely exceeds the 40s OR ceiling (live evidence 2026-06-26: high-effort grok-4.3
+// routinely exceeds the 40s OR ceiling (live evidence 2026-06-26: high-effort grok-direct
 // reasoning seat `reason-1` timed out at 40s, retried, timed out again → ~80s burned
 // before salvage). Give grok-direct reasoning the same 60s budget capability seats get.
 const GROK_REASONING_TIMEOUT_MS = 60_000;
@@ -635,7 +635,6 @@ function recordOracleMetrics(
   prompt: string,
   route: RoutePlan,
   results: SlotResult[],
-  degraded: boolean,
 ): void {
   const qHash = hashQuestion(prompt);
   const preview = process.env.METRICS_LOG_PROMPTS === "1" ? prompt : undefined;
@@ -643,6 +642,8 @@ function recordOracleMetrics(
     const groundedReq = !!r.seat.grounded;
     const groundingFired = r.status === "ok" && groundedReq && (r.citations?.length ?? 0) > 0;
     const xFired = r.status === "ok" && !!r.seat.grok_grounding && (r.citations?.length ?? 0) > 0;
+    // B1: per-seat degraded (this seat failed), not run-level "any sibling failed".
+    const seatOk = r.status === "ok";
     const rec: SeatMetricRecord = {
       ts: new Date().toISOString(),
       tool: "oracle",
@@ -658,8 +659,8 @@ function recordOracleMetrics(
       latency_ms: r.latency_ms ?? 0,
       failover_fired: !!r.failover_fired,
       timed_out: r.status === "timeout",
-      ok: r.status === "ok",
-      degraded,
+      ok: seatOk,
+      degraded: !seatOk,
       error_class: classifyError(r.status, r.error),
       question_hash: qHash,
       prompt_preview: preview,
@@ -825,8 +826,7 @@ export async function runOracle(
       console.error(`[ask_oracle] salvage seat also failed: ${(e as Error)?.message ?? e}`);
     }
   }
-  const degraded = !!classifierError || results.some((r) => r.status !== "ok");
-  recordOracleMetrics(prompt, route, results, degraded);
+  recordOracleMetrics(prompt, route, results);
   return assemble(deps, route, results, ov, !!classifierError);
 }
 

@@ -147,13 +147,20 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         const label = spec.label ?? spec.model;
         const seatId = `panel-${idx}-${label}`;
         const qHash = hashQuestion(spec.prompt);
+        const defaultTransport: "or" | "direct" =
+          spec.model === "grok" ? "direct" : geminiTransport === "openrouter" ? "or" : "direct";
+        // Single record path for the whole seat (incl. applyLens failures — B2).
+        // degraded is per-seat (ok===false), not run-level (B1).
+        let recorded = false;
         const record = (ok: boolean, extra: {
           text?: string;
           citations?: string[];
           error?: string;
-          transport: "or" | "direct";
+          transport?: "or" | "direct";
           timed_out?: boolean;
         }) => {
+          if (recorded) return;
+          recorded = true;
           void recordSeatMetric({
             ts: new Date().toISOString(),
             tool: "panel",
@@ -161,7 +168,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             seat_id: seatId,
             family: spec.model === "grok" ? "grok" : familyFromSlug(spec.model_slug || "gemini"),
             model_slug: spec.model_slug || spec.model,
-            transport: extra.transport,
+            transport: extra.transport ?? defaultTransport,
             grounded_requested: !!spec.grounded,
             grounding_fired: ok && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
             x_search_fired: ok && spec.model === "grok" && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
@@ -170,103 +177,122 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             failover_fired: false,
             timed_out: !!extra.timed_out,
             ok,
+            degraded: !ok,
             error_class: classifyError(ok ? "ok" : extra.timed_out ? "timeout" : "error", extra.error),
             question_hash: qHash,
             prompt_preview: process.env.METRICS_LOG_PROMPTS === "1" ? spec.prompt : undefined,
           });
         };
 
-        // Resolve lens → effective system per spec (default second-opinion frame
-        // auto-applies when neither lens nor system is given; pass lens:"none" to opt out).
-        const { system, error } = applyLens(spec.lens, spec.system);
-        if (error) throw new Error(error);
+        // Outer try wraps applyLens + provider call so lens-config failures are
+        // visible to metrics (B2). Provider paths record success/failure; outer
+        // catch is a safety net (lens errors, unexpected throws).
+        try {
+          // Resolve lens → effective system per spec (default second-opinion frame
+          // auto-applies when neither lens nor system is given; pass lens:"none" to opt out).
+          const { system, error } = applyLens(spec.lens, spec.system);
+          if (error) throw new Error(error);
 
-        if (spec.model === "grok") {
-          const grounding: Grounding = spec.grounded ? "auto" : "off";
+          if (spec.model === "grok") {
+            const grounding: Grounding = spec.grounded ? "auto" : "off";
+            try {
+              const r = await callGrok(
+                opts.xaiApiKey,
+                spec.prompt,
+                {
+                  system,
+                  model: spec.model_slug,
+                  reasoning_effort: spec.reasoning_effort,
+                  temperature: spec.temperature,
+                  grounding,
+                  include_web: spec.include_web,
+                },
+                xaiBaseUrl,
+              );
+              record(true, { text: r.text, citations: r.citations, transport: "direct" });
+              return { text: r.text, citations: r.citations };
+            } catch (e) {
+              const msg = (e as Error)?.message ?? String(e);
+              record(false, {
+                error: msg,
+                transport: "direct",
+                timed_out: isAttemptTimeoutError(msg),
+              });
+              throw e;
+            }
+          }
+          // gemini — transport chosen by GEMINI_TRANSPORT (env). The OpenRouter
+          // path (BYOK) handles both ungrounded and grounded specs; grounded forces
+          // engine:"native" inside callGeminiViaOpenRouter (real Google grounding).
+          const geminiOpts = {
+            system,
+            model: spec.model_slug,
+            grounded: spec.grounded,
+            reasoning_effort: spec.reasoning_effort,
+            temperature: spec.temperature,
+            ...(spec.grounded && geminiTransport === "openrouter"
+              ? { attempt_timeout_ms: PANEL_GROUNDED_OR_ATTEMPT_TIMEOUT_MS }
+              : {}),
+          };
+          const callGeminiOnce = () =>
+            geminiTransport === "openrouter"
+              ? callGeminiViaOpenRouter(opts.openrouterApiKey, spec.prompt, geminiOpts)
+              : callGemini(geminiClient, spec.prompt, geminiOpts);
+
+          // FAIL LOUD, not soft. Gemini grounding (googleSearch / engine:"native")
+          // is model-discretion: the model decides whether to search, so a grounded
+          // spec can come back weights-only with ZERO citations — a clean answer
+          // indistinguishable from a real grounded one. That's the dangerous case
+          // (e.g. the journaling routine then "answers" recent events from stale
+          // weights). So when grounding was REQUESTED but no citations came back,
+          // retry; if still ungrounded after the budget, throw rather than return
+          // the sourceless answer. ask_panel's allSettled turns this into ok:false
+          // with the message below, so the caller sees grounding_fired:false.
+          // (Mirrors grokCore's applyGroundingContract for the "required" contract.)
+          //
+          // Budget = 2 retries (3 attempts). A/B test 2026-06-19 (n=50/arm): the
+          // openrouter(native) per-call miss rate is ~8% and independent, so 2
+          // retries drive the effective miss to ~0.08^3 ≈ 0.05% while keeping the
+          // ~2.5s happy path (only the ~8% that miss pay ~+2.5s each). The direct
+          // (AI Studio) transport misses 0% but is ~5x slower (p50 12.8s, p90 22s)
+          // AND had a 4% hard-500 rate — so retry-on-openrouter beats switching the
+          // default. Enforced grounding is NOT an option: AI Studio rejects
+          // google_search_retrieval on gemini-3.1-pro (the always-execute retrieval
+          // tool is Vertex-only), so both transports are inherently AUTO.
+          const MAX_GROUNDING_RETRIES = 2;
+          const transport: "or" | "direct" = geminiTransport === "openrouter" ? "or" : "direct";
           try {
-            const r = await callGrok(
-              opts.xaiApiKey,
-              spec.prompt,
-              {
-                system,
-                model: spec.model_slug,
-                reasoning_effort: spec.reasoning_effort,
-                temperature: spec.temperature,
-                grounding,
-                include_web: spec.include_web,
-              },
-              xaiBaseUrl,
-            );
-            record(true, { text: r.text, citations: r.citations, transport: "direct" });
+            let r = await callGeminiOnce();
+            if (spec.grounded) {
+              for (let attempt = 1; attempt <= MAX_GROUNDING_RETRIES && r.citations.length === 0; attempt++) {
+                console.error(`[ask_panel] gemini grounded miss (0 citations) — retry ${attempt}/${MAX_GROUNDING_RETRIES}. label=${label}`);
+                r = await callGeminiOnce();
+              }
+              if (r.citations.length === 0) {
+                throw new Error(
+                  `grounding_fired:false — Gemini grounded request returned zero citations after ` +
+                    `${MAX_GROUNDING_RETRIES} retries. Refusing to pass back a weights-only answer as if ` +
+                    `it were grounded; the answer may be stale/hallucinated. Retry, rephrase to demand ` +
+                    `sources, or use a grok spec.`,
+                );
+              }
+            }
+            record(true, { text: r.text, citations: r.citations, transport });
             return { text: r.text, citations: r.citations };
           } catch (e) {
             const msg = (e as Error)?.message ?? String(e);
-            record(false, { error: msg, transport: "direct", timed_out: /timed out/i.test(msg) });
+            const timedOut = isAttemptTimeoutError(msg);
+            record(false, { error: msg, transport, timed_out: timedOut });
             throw e;
           }
-        }
-        // gemini — transport chosen by GEMINI_TRANSPORT (env). The OpenRouter
-        // path (BYOK) handles both ungrounded and grounded specs; grounded forces
-        // engine:"native" inside callGeminiViaOpenRouter (real Google grounding).
-        const geminiOpts = {
-          system,
-          model: spec.model_slug,
-          grounded: spec.grounded,
-          reasoning_effort: spec.reasoning_effort,
-          temperature: spec.temperature,
-          ...(spec.grounded && geminiTransport === "openrouter"
-            ? { attempt_timeout_ms: PANEL_GROUNDED_OR_ATTEMPT_TIMEOUT_MS }
-            : {}),
-        };
-        const callGeminiOnce = () =>
-          geminiTransport === "openrouter"
-            ? callGeminiViaOpenRouter(opts.openrouterApiKey, spec.prompt, geminiOpts)
-            : callGemini(geminiClient, spec.prompt, geminiOpts);
-
-        // FAIL LOUD, not soft. Gemini grounding (googleSearch / engine:"native")
-        // is model-discretion: the model decides whether to search, so a grounded
-        // spec can come back weights-only with ZERO citations — a clean answer
-        // indistinguishable from a real grounded one. That's the dangerous case
-        // (e.g. the journaling routine then "answers" recent events from stale
-        // weights). So when grounding was REQUESTED but no citations came back,
-        // retry; if still ungrounded after the budget, throw rather than return
-        // the sourceless answer. ask_panel's allSettled turns this into ok:false
-        // with the message below, so the caller sees grounding_fired:false.
-        // (Mirrors grokCore's applyGroundingContract for the "required" contract.)
-        //
-        // Budget = 2 retries (3 attempts). A/B test 2026-06-19 (n=50/arm): the
-        // openrouter(native) per-call miss rate is ~8% and independent, so 2
-        // retries drive the effective miss to ~0.08^3 ≈ 0.05% while keeping the
-        // ~2.5s happy path (only the ~8% that miss pay ~+2.5s each). The direct
-        // (AI Studio) transport misses 0% but is ~5x slower (p50 12.8s, p90 22s)
-        // AND had a 4% hard-500 rate — so retry-on-openrouter beats switching the
-        // default. Enforced grounding is NOT an option: AI Studio rejects
-        // google_search_retrieval on gemini-3.1-pro (the always-execute retrieval
-        // tool is Vertex-only), so both transports are inherently AUTO.
-        const MAX_GROUNDING_RETRIES = 2;
-        const transport: "or" | "direct" = geminiTransport === "openrouter" ? "or" : "direct";
-        try {
-          let r = await callGeminiOnce();
-          if (spec.grounded) {
-            for (let attempt = 1; attempt <= MAX_GROUNDING_RETRIES && r.citations.length === 0; attempt++) {
-              console.error(`[ask_panel] gemini grounded miss (0 citations) — retry ${attempt}/${MAX_GROUNDING_RETRIES}. label=${label}`);
-              r = await callGeminiOnce();
-            }
-            if (r.citations.length === 0) {
-              throw new Error(
-                `grounding_fired:false — Gemini grounded request returned zero citations after ` +
-                  `${MAX_GROUNDING_RETRIES} retries. Refusing to pass back a weights-only answer as if ` +
-                  `it were grounded; the answer may be stale/hallucinated. Retry, rephrase to demand ` +
-                  `sources, or use a grok spec.`,
-              );
-            }
-          }
-          record(true, { text: r.text, citations: r.citations, transport });
-          return { text: r.text, citations: r.citations };
         } catch (e) {
+          // Safety net: applyLens / unexpected throws before provider record().
           const msg = (e as Error)?.message ?? String(e);
-          const timedOut = isAttemptTimeoutError(msg);
-          record(false, { error: msg, transport, timed_out: timedOut });
+          record(false, {
+            error: msg,
+            transport: defaultTransport,
+            timed_out: isAttemptTimeoutError(msg),
+          });
           throw e;
         }
       });

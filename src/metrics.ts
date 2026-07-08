@@ -50,13 +50,20 @@ export function familyFromSlug(modelSlug: string, provider?: string): string {
   return "other";
 }
 
-/** True when an error message looks like a fetch/AbortSignal seat timeout (not a 429/5xx). */
+/**
+ * True when an error message looks like a seat/fetch *timeout* (not a generic abort).
+ * Bare "aborted" / socket-reset must NOT count as timeout — that inflated timeout_rate
+ * and biased the panel-failover gate (B3). Require explicit timeout language.
+ */
 export function isAttemptTimeoutError(error?: string): boolean {
   const msg = (error || "").toLowerCase();
-  return (
-    /timed out|timeouterror|signal timed out|aborterror/.test(msg) ||
-    (msg.includes("openrouter") && msg.includes("aborted"))
-  );
+  // Explicit timeout wording (withTimeout, AbortSignal.timeout, DOM TimeoutError).
+  if (/timed out|timeouterror|signal timed out/.test(msg)) return true;
+  // AbortError alone is ambiguous (cancel / reset / hang-up); only count when
+  // the message also says timeout (AbortSignal.timeout surfaces both).
+  if (msg.includes("aborterror") && msg.includes("timeout")) return true;
+  if (msg.includes("openrouter") && msg.includes("aborted") && msg.includes("timeout")) return true;
+  return false;
 }
 
 export function classifyError(status: string, error?: string): string | undefined {
@@ -168,6 +175,7 @@ export function computeMetricsStats(
     const groundingMiss = groundedReq.filter((r) => !r.grounding_fired).length;
     const failovers = bucket.filter((r) => r.failover_fired).length;
     const timeouts = bucket.filter((r) => r.timed_out).length;
+    const degraded = bucket.filter((r) => r.degraded).length;
     const errors: Record<string, number> = {};
     for (const r of bucket) {
       if (r.error_class) errors[r.error_class] = (errors[r.error_class] || 0) + 1;
@@ -182,6 +190,8 @@ export function computeMetricsStats(
       grounding_miss_rate: groundedReq.length ? groundingMiss / groundedReq.length : 0,
       failover_rate: n ? failovers / n : 0,
       timeout_rate: n ? timeouts / n : 0,
+      // Per-seat degraded (ok===false), NOT run-level "sibling failed" (B1).
+      degraded_rate: n ? degraded / n : 0,
       error_class: errors,
     };
   }

@@ -19,7 +19,7 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 // "openrouter" in the env to route Gemini through OpenRouter. Grok is unaffected.
 const GEMINI_TRANSPORT = process.env.GEMINI_TRANSPORT === "openrouter" ? "openrouter" : "direct";
 const XAI_BASE_URL = "https://api.x.ai/v1";
-const DEFAULT_MODEL = "grok-4.3";
+const DEFAULT_MODEL = "grok-4.5";
 const PORT = Number(process.env.PORT ?? 3000);
 
 function buildServer() {
