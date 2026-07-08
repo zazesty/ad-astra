@@ -362,36 +362,58 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
     {
       title: "Research Fanout",
       description:
-        "Decompose a RESEARCH question into parallel grounded sub-queries, fetch evidence, and return a " +
-        "cited synthesis (or raw legs). Use for multi-angle evidence gathering under one call (hard ~85s budget, " +
-        "partial return if some legs fail). NOT a multi-model opinion panel (use ask_oracle / ask_panel). " +
-        "NOT a single live-X lookup (use grok_x_search). Legs call provider cores only — no nested tools.",
+        "USAGE: multi-source EVIDENCE gathering — not general deep-thinking. " +
+        "Ideal: factual / current / multi-angle questions that need web and/or X sources " +
+        "(e.g. \"What is the current US federal funds rate range and who said what on X?\"). " +
+        "Avoid: pure tradeoff adjudication, opinion panels, or reasoning-only synthesis " +
+        "(use ask_oracle / ask_panel). Avoid: a single live-X lookup (use grok_x_search). " +
+        "FLOW: classifier decomposes into ≤max_legs grounded sub-queries (default mode = " +
+        "gemini web-grounded; optional grok_x / grok_grounded) → legs run in parallel on " +
+        "provider cores only (no nested tools) → optional synthesis merges into one answer " +
+        "with a union of citations. Legs fail independently; partial results return with " +
+        "degraded:true if some legs miss. Hard ~85s outer budget; multi-leg = multi-call " +
+        "cost; typical healthy runs are tens of seconds. lens/system apply to SYNTHESIS only, " +
+        "not decomposition or leg fetch. synthesize=true (default) = coherent answer+citations; " +
+        "false = raw legs for your own merge.",
       inputSchema: {
         prompt: z
           .string()
           .refine((s) => s.trim().length > 0, { message: "prompt must not be empty" })
-          .describe("Research question to decompose and investigate."),
+          .describe(
+            "Evidence-seeking research question (multi-source / factual / current). " +
+              "Example good: \"Summarize the latest FOMC rate decision and cite sources.\" " +
+              "Example better as ask_oracle: \"Should we adopt trunk-based development?\"",
+          ),
         synthesize: z
           .boolean()
           .optional()
-          .describe("true (default) = merge legs into one answer + citations; false = return legs only."),
+          .describe(
+            "true (default) = merge legs into one coherent answer + citation union; " +
+              "false = return raw legs only (high-control / you synthesize).",
+          ),
         max_legs: z
           .number()
           .int()
           .min(1)
           .max(MAX_LEGS_HARD)
           .optional()
-          .describe("Max sub-queries (default 4, hard cap 5)."),
-        lens: z.string().optional().describe("Optional analytical lens applied to synthesis."),
-        system: z.string().optional().describe("Extra system text for synthesis."),
+          .describe("Max sub-queries (default 4, hard cap 5). Vague prompts may yield fewer."),
+        lens: z
+          .string()
+          .optional()
+          .describe("Analytical lens for the final synthesis only (not leg generation)."),
+        system: z
+          .string()
+          .optional()
+          .describe("Extra system text for synthesis only (not leg generation)."),
         reasoning_effort: z
           .enum(["low", "medium", "high"])
           .optional()
-          .describe("Effort for legs (default high)."),
+          .describe("Effort for grounded legs (default high)."),
         force_x_leg: z
           .boolean()
           .optional()
-          .describe("Ensure at least one grok_x leg when true."),
+          .describe("Ensure ≥1 live-X (grok_x) leg when true."),
       },
     },
     async (args: {
