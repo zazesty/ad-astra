@@ -35,7 +35,10 @@ export function registerGrokXSearch(
         "public sentiment, breaking discussion, and what people are saying right " +
         "now on a topic. Returns Grok's synthesized answer over matching posts PLUS " +
         "citations to the source posts. Live-or-nothing: if no matching posts are " +
-        "found it returns an error rather than a sourceless answer. (For ungrounded " +
+        "found it returns an error rather than a sourceless answer. Its edge is those " +
+        "citations + the live-or-nothing contract: a caller that ALREADY has native live-X " +
+        "access may get lower latency from its own tools — reach for grok_x_search when you " +
+        "lack native X, or when you need the cited, fail-loud result. (For ungrounded " +
         "reasoning, a cross-model panel, or general web grounding, use ask_panel.)",
       inputSchema: {
         query: z

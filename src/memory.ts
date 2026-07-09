@@ -571,7 +571,7 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Search",
       description:
-        "Search the shared cross-harness memory KB (facts, decisions, gotchas, setup; the single source of truth also used by Claude Code auto-memory). Hybrid search: tag filter (hard AND pre-filter) → semantic cosine rank → keyword boost/fallback. Defaults to active facts only. Returns headers + excerpts. Discovery tool — follow up with memory_retrieve for bodies. For a plain unfiltered enumeration with no keyword, prefer memory_list (cheaper, headers-only).",
+        "Search the shared cross-harness memory KB (facts, decisions, gotchas, setup; the single source of truth also used by Claude Code auto-memory). Hybrid search: tag filter (hard AND pre-filter) → semantic cosine rank → keyword boost/fallback. Defaults to active facts only. Returns headers + excerpts. Discovery tool — follow up with memory_retrieve for bodies. For a plain unfiltered enumeration with no keyword, prefer memory_list (cheaper, headers-only). Tags without a query → tag-filtered facts newest-first (like a filtered list, but with this tool's field weighting).",
       inputSchema: {
         query: z
           .string()
@@ -636,7 +636,7 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Upsert",
       description:
-        "Create or update a fact in the shared KB (the single source of truth also used by Claude Code auto-memory + Grok Build). On update: omitted fields are preserved; any field you pass completely replaces the previous value (tags/related arrays are replaced, not unioned — send the full desired set). Bumps updated + version. Provide clean markdown body only (no --- frontmatter block). If editing a fact retrieved via memory_retrieve, strip the frontmatter it returned before sending. This is the only write path for auto-update and cross-harness facts.",
+        "Create or update a fact in the shared KB (the single source of truth also used by Claude Code auto-memory + Grok Build). On update: omitted fields are preserved; any field you pass completely replaces the previous value (tags/related arrays are replaced, not unioned — send the full desired set). Bumps updated + version. Provide clean markdown body only (no --- frontmatter block). If editing a fact retrieved via memory_retrieve, strip the frontmatter it returned before sending. This is the only write path for auto-update and cross-harness facts. COLLISION: keyed by EXACT id (input.id, else input.name; kebab-case by convention — NOT auto-slugified). An existing id updates/merges in place; a near-duplicate id creates a SEPARATE fact — there is no fuzzy dedup, so memory_search first to avoid clobbering or duplicating a fact.",
       inputSchema: {
         id: z.string().optional().describe("Optional explicit id/slug. Defaults to sanitized `name`."),
         name: z
@@ -709,7 +709,7 @@ export function registerMemoryTools(server: any) {
       description:
         "List fact headers (id, name, desc, tags, status, updated). Optional tag filter. Defaults to active facts only. Cheap overview or TOC builder. Use when you don't need bodies yet. No keyword/body matching — use memory_search for that. Best for full enumeration or a TOC. Part of the single source of truth shared with Claude Code auto-memory.",
       inputSchema: {
-        tags: z.array(z.string()).optional().describe("Filter to facts having ALL listed tags."),
+        tags: z.array(z.string()).optional().describe("Filter to facts having ALL listed tags. (tags only — for topic/keyword scoping use memory_search.)"),
         limit: z.number().int().min(1).max(200).optional().describe("Max facts (default 100)."),
         include_archived: z
           .boolean()

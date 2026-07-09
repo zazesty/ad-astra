@@ -858,7 +858,9 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
       title: "Ask Oracle (auto-routed)",
       description:
         "Auto-routing front door over the model layer. Give it a prompt; it classifies the question and " +
-        "routes a panel for you. SEATS come in two kinds: CAPABILITY seats — live-X (Grok x_search) and " +
+        "routes a panel for you. DEFAULT returns RAW labeled seats for YOU to synthesize — it gathers, it " +
+        "does NOT judge (same output contract as ask_panel); pass synthesize:true for ONE merged verdict. " +
+        "SEATS come in two kinds: CAPABILITY seats — live-X (Grok x_search) and " +
         "web grounding (Gemini Google Search) — and REASONING seats — a model pool that, on a multi-seat " +
         "panel, is filled DIVERSITY-FIRST (cross-family by construction, e.g. Grok + Gemini) with " +
         "`openrouter/auto` used only as overflow once each family is seated. The classifier decides how " +
@@ -879,11 +881,11 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         prompt: z
           .string()
           .refine((s) => s.trim().length > 0, { message: "prompt must not be empty or whitespace-only" })
-          .describe("The question to route and answer."),
+          .describe("The question to route and answer (raw labeled seats by default; synthesize:true for one merged verdict)."),
         synthesize: z
           .boolean()
           .optional()
-          .describe("true → merge the seats into ONE answer (judge = gemini-pro-latest), for headless/automated callers. Default false → return raw labeled answers for you to synthesize."),
+          .describe("true → merge the seats into ONE answer (judge = gemini-pro-latest), for headless/automated callers. Default false → return raw labeled answers for you to synthesize. (NOTE: research_fanout's synthesize defaults to the OPPOSITE — true.)"),
         system: z
           .string()
           .optional()

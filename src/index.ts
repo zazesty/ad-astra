@@ -39,7 +39,7 @@ function buildServer() {
             message: "query must not be empty or whitespace-only",
           })
           .describe("Topic to search, e.g. 'fed rate cut', 'california governor primary'. Broader terms return more markets."),
-        limit: z.number().optional().describe("Max markets to return (default 5)."),
+        limit: z.number().int().min(1).max(25).optional().describe("Max markets to return (default 5)."),
         sources: z.array(z.string()).optional().describe("Venues to query; default ['polymarket','kalshi']."),
       },
     },

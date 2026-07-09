@@ -364,6 +364,9 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
       description:
         "USAGE: multi-angle EVIDENCE fanout on a SCOPED research question — not a general " +
         "deep-thinker, not a live-news wire, not an opinion panel. " +
+        "Think of it as a BOUNDED PARALLEL SUBAGENT: it saves wall-clock on independent sub-questions a " +
+        "native research loop would run sequentially (native deep-research still wins when you want to STEER " +
+        "an evolving, iterative loop rather than fan out fixed legs). " +
         "BEST: multi-hop factual/regional/technical research that benefits from parallel " +
         "grounded sub-queries (e.g. industry+labor+tech+supply-chain in a region; " +
         "\"current FOMC rate range with official sources\"). Classifier often plans " +
@@ -402,7 +405,8 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           .describe(
             "true (default) = one coherent answer + citation union; " +
               "false = raw legs only (inspect/decompose further yourself). " +
-              "false is excellent for multi-hop dumps you will merge offline.",
+              "false is excellent for multi-hop dumps you will merge offline. " +
+              "(NOTE: ask_oracle's synthesize defaults to the OPPOSITE — false.)",
           ),
         max_legs: z
           .number()
