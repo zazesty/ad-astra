@@ -27,6 +27,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import Parser from "rss-parser";
+import { withTimeout } from "./timeouts.js";
 import {
   callGemini,
   callGeminiViaOpenRouter,
@@ -175,19 +176,6 @@ function itemDate(item: any): string {
 function snippetOf(item: any): string {
   const s = (item?.contentSnippet || item?.content || item?.summary || "").toString();
   return s.replace(/\s+/g, " ").trim().slice(0, SNIPPET_CHARS);
-}
-
-/** Reject after `ms` so a feed that connects-but-stalls can't hang the digest. */
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
-    // unref so a stray timer never keeps the process alive past the work.
-    (timer as any).unref?.();
-    p.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e instanceof Error ? e : new Error(String(e))); },
-    );
-  });
 }
 
 // Word-boundary keyword match. Substring matching is a trap for short tokens:

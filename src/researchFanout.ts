@@ -175,6 +175,27 @@ export function ensureForceX(plans: LegPlan[], force: boolean, maxLegs: number):
   return next.slice(0, maxLegs);
 }
 
+/**
+ * Pure post-legs assembly (E2 soak contract without live providers):
+ * citation union from ok legs only; degraded when any leg failed/timed out.
+ */
+export function summarizeLegs(legs: LegResult[]): {
+  citations: string[];
+  okCount: number;
+  degraded: boolean;
+  slots_status: string;
+} {
+  const citations = dedupeCitations(legs.flatMap((l) => (l.status === "ok" ? l.citations : [])));
+  const okCount = legs.filter((l) => l.status === "ok").length;
+  const degraded = okCount < legs.length;
+  return {
+    citations,
+    okCount,
+    degraded,
+    slots_status: `${okCount}/${legs.length} legs ok`,
+  };
+}
+
 async function runLeg(
   opts: RegisterOpts,
   geminiClient: GeminiClient | null,
@@ -493,12 +514,11 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
         });
         phases.legs_ms = Date.now() - legsT0;
 
-        const citations = dedupeCitations(legs.flatMap((l) => (l.status === "ok" ? l.citations : [])));
-        const okCount = legs.filter((l) => l.status === "ok").length;
-        let degraded = okCount < legs.length;
+        const summary = summarizeLegs(legs);
+        let degraded = summary.degraded;
         let answer: string | undefined;
 
-        if (doSynth && okCount > 0) {
+        if (doSynth && summary.okCount > 0) {
           const synthT0 = Date.now();
           const synthBudget = Math.min(SYNTH_CAP_MS, remainingMs(outerT0, OUTER_BUDGET_MS));
           const lensed = applyLens(args.lens, args.system);
@@ -523,7 +543,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
               .join("\n\n");
           }
           phases.synth_ms = Date.now() - synthT0;
-        } else if (doSynth && okCount === 0) {
+        } else if (doSynth && summary.okCount === 0) {
           degraded = true;
         }
 
@@ -540,8 +560,8 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           legs,
           degraded,
           ...(answer != null ? { answer } : {}),
-          citations,
-          slots_status: `${okCount}/${legs.length} legs ok`,
+          citations: summary.citations,
+          slots_status: summary.slots_status,
         };
 
         return { content: [{ type: "text", text: JSON.stringify(resp, null, 2) }] };

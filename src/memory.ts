@@ -299,6 +299,34 @@ function keywordScore(fact: MemoryFact, query: string): number {
   return score;
 }
 
+/** A2: cosine is almost always >0 once vectors exist; floor kills weak semantic noise. */
+export const SEMANTIC_FLOOR = 0.55;
+
+/** Keep a hit if it has a real keyword match OR semantic similarity above the floor. */
+export function passesSemanticFloor(
+  kw: number,
+  sem: number,
+  floor: number = SEMANTIC_FLOOR,
+): boolean {
+  return kw > 0 || sem > floor;
+}
+
+/**
+ * A3: hard wall-clock on query embedding. On timeout/throw → null so search
+ * falls back to keyword-only instead of hanging the tool call.
+ */
+export async function embedQueryWithBudget(
+  embedFn: () => Promise<number[] | null>,
+  ms: number = 8_000,
+): Promise<number[] | null> {
+  try {
+    return await withTimeout(embedFn(), ms, "memory_search embed");
+  } catch (e) {
+    console.error(`[memory_search] embed timed out/failed — keyword-only: ${(e as Error)?.message ?? e}`);
+    return null;
+  }
+}
+
 function matchesQuery(fact: MemoryFact, query: string): boolean {
   return keywordScore(fact, query) > 0;
 }
@@ -323,21 +351,15 @@ async function searchFacts(
 
   if (query) {
     const embeddings = await loadEmbeddings(dir);
-    let queryVec: number[] | null = null;
     // A3: embed has a hard timeout → fall back to keyword-only (no hang).
+    let queryVec: number[] | null = null;
     if (GEMINI_API_KEY) {
-      try {
-        queryVec = await withTimeout(embedFactText(GEMINI_API_KEY, query), 8_000, "memory_search embed");
-      } catch (e) {
-        console.error(`[memory_search] embed timed out/failed — keyword-only: ${(e as Error)?.message ?? e}`);
-        queryVec = null;
-      }
+      queryVec = await embedQueryWithBudget(() => embedFactText(GEMINI_API_KEY, query));
     }
 
     // A2: semantic floor — cosine is almost always >0 once vectors exist, so
     // score>0 alone returned "limit" irrelevant facts. Require real keyword hit
     // OR semantic similarity above threshold.
-    const SEM_FLOOR = 0.55;
     ranked = tagFiltered.map((fact) => {
       const kw = keywordScore(fact, query);
       let sem = 0;
@@ -348,8 +370,26 @@ async function searchFacts(
       const score = sem * 10 + kw;
       return { fact, score, kw, sem };
     });
+    // E1: calibration breadcrumb for SEMANTIC_FLOOR (journald only). sem-only
+    // candidates near the floor tell us whether 0.55 is too strict/loose.
+    if (queryVec) {
+      const semOnly = ranked.filter((r) => (r.kw ?? 0) === 0 && (r.sem ?? 0) > 0);
+      const nearFloor = semOnly.filter(
+        (r) => (r.sem ?? 0) > SEMANTIC_FLOOR - 0.1 && (r.sem ?? 0) <= SEMANTIC_FLOOR + 0.05,
+      );
+      const kept = ranked.filter((r) => passesSemanticFloor(r.kw ?? 0, r.sem ?? 0));
+      const droppedSemOnly = semOnly.filter((r) => !passesSemanticFloor(r.kw ?? 0, r.sem ?? 0));
+      const maxDropped = droppedSemOnly.reduce((m, r) => Math.max(m, r.sem ?? 0), 0);
+      console.error(
+        `[memory_search] A2 calib q=${JSON.stringify(query).slice(0, 60)} ` +
+          `n=${ranked.length} kept=${kept.length} kw_hits=${ranked.filter((r) => (r.kw ?? 0) > 0).length} ` +
+          `sem_only=${semOnly.length} dropped_sem_only=${droppedSemOnly.length} ` +
+          `near_floor=${nearFloor.length} max_dropped_sem=${maxDropped.toFixed(3)} ` +
+          `floor=${SEMANTIC_FLOOR} embed=${queryVec ? "ok" : "none"}`,
+      );
+    }
     ranked = ranked
-      .filter((r) => (r.kw ?? 0) > 0 || (r.sem ?? 0) > SEM_FLOOR)
+      .filter((r) => passesSemanticFloor(r.kw ?? 0, r.sem ?? 0))
       .sort((a, b) => b.score - a.score || (b.fact.updated || "").localeCompare(a.fact.updated || ""));
   } else {
     ranked = tagFiltered

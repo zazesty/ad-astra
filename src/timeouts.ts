@@ -3,7 +3,12 @@
  * Prefer this over local withTimeout copies so outer-budget semantics stay consistent.
  */
 
-/** Race a promise against a wall-clock deadline. Rejects with `${label} timed out after ${ms}ms`. */
+/**
+ * Race a promise against a wall-clock deadline.
+ * Rejects with `${label} timed out after ${ms}ms`.
+ * Note: do not unref the timer by default — unref + only-unreferenced work lets
+ * short-lived scripts (tests, one-shots) exit before the timeout fires.
+ */
 export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   if (ms <= 0) {
     return Promise.reject(new Error(`${label} timed out after ${ms}ms`));

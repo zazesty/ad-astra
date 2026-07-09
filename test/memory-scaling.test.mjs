@@ -6,7 +6,14 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { regenerateIndexes, loadAllFacts, isActiveFact } from "../build/memory.js";
+import {
+  regenerateIndexes,
+  loadAllFacts,
+  isActiveFact,
+  SEMANTIC_FLOOR,
+  passesSemanticFloor,
+  embedQueryWithBudget,
+} from "../build/memory.js";
 import { cosineSimilarity, pruneEmbeddings } from "../build/memoryEmbeddings.js";
 
 let pass = 0;
@@ -53,6 +60,39 @@ check("cosineSimilarity orthogonal", cosineSimilarity([1, 0], [0, 1]) === 0);
   check("pruneEmbeddings keeps valid ids", "a" in store && "b" in store);
   check("pruneEmbeddings drops orphan ids", !("orphan1" in store) && !("orphan2" in store));
   check("pruneEmbeddings no-op when all valid", pruneEmbeddings(store, ["a", "b"]) === 0);
+}
+
+// A2: semantic floor — weak cosine alone must not pass; keyword or strong sem does.
+{
+  check("SEMANTIC_FLOOR is 0.55", SEMANTIC_FLOOR === 0.55);
+  check("A2 floor: weak sem, no kw → drop", !passesSemanticFloor(0, 0.3));
+  check("A2 floor: at-floor sem is exclusive (>)", !passesSemanticFloor(0, SEMANTIC_FLOOR));
+  check("A2 floor: strong sem, no kw → keep", passesSemanticFloor(0, 0.56));
+  check("A2 floor: keyword hit, weak sem → keep", passesSemanticFloor(1, 0.1));
+  check("A2 floor: both zero → drop", !passesSemanticFloor(0, 0));
+}
+
+// A3: embed timeout/throw → null (keyword-only path), not a hung rejection.
+// Use a *slow* promise (eventually settles) not a forever-pending one — forever
+// hang triggers Node "unsettled top-level await" and can stall the test runner.
+{
+  const slow = () =>
+    new Promise((resolve) => {
+      const t = setTimeout(() => resolve([9, 9]), 500);
+      t.unref?.();
+    });
+  const t0 = Date.now();
+  const timed = await embedQueryWithBudget(slow, 40);
+  const elapsed = Date.now() - t0;
+  check("A3 embed timeout returns null", timed === null);
+  check("A3 embed timeout fires quickly", elapsed < 500);
+
+  const boom = () => Promise.reject(new Error("embed 503"));
+  const failed = await embedQueryWithBudget(boom, 8_000);
+  check("A3 embed throw returns null", failed === null);
+
+  const ok = await embedQueryWithBudget(async () => [0.1, 0.2], 8_000);
+  check("A3 embed success returns vector", Array.isArray(ok) && ok.length === 2);
 }
 
 const dir = await mkdtemp(join(tmpdir(), "memory-scale-"));
