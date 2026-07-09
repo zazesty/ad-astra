@@ -230,6 +230,43 @@ console.log("\nUnit: assemble — fusion synthesize + tags");
   ok(resp.raw?.[0]?.tags?.includes("fusion"), "fusion seat tagged fusion in raw output");
 }
 
+// B4: hybrid fusion + capability seat, synthesize. The solo-fusion shortcut must NOT
+// fire (that regression silently dropped a co-succeeding grounded/x seat + its
+// citations, oracleEngine.ts:723); both seats must reach the judge. Offline: stub
+// global fetch so the OR judge call is deterministic and networkless.
+console.log("\nUnit: assemble — hybrid fusion + capability synth (offline, stubbed OR judge)");
+{
+  const realFetch = globalThis.fetch;
+  let judgeBody = null;
+  globalThis.fetch = async (_url, init) => {
+    judgeBody = JSON.parse(init.body);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { content: "MERGED: fusion + grounded" } }] }),
+      text: async () => "",
+    };
+  };
+  try {
+    const fusionSeat = { id: "fusion", provider: "openrouter", model_slug: FUSION_MODEL_SLUG, lens: "default", reasoning_effort: "high" };
+    const groundedSeat = { id: "gemini-grounded", provider: "openrouter", model_slug: "google/gemini-pro-latest", grounded: true, lens: "default", reasoning_effort: "high" };
+    const route = { mode: "panel", models: [FUSION_MODEL_SLUG, "google/gemini-pro-latest"], lens: "default", reasoning_effort: "high", used_x_search: false, used_grounding: false, panel_n: 2, source: "override", classifier_model: null, rationale: "r", engine: "fusion", fusion_preset: "general-budget" };
+    const results = [
+      { seat: fusionSeat, status: "ok", text: "fusion answer" },
+      { seat: groundedSeat, status: "ok", text: "grounded answer", citations: ["https://src.example/a"] },
+    ];
+    const resp = await assemble({ openrouterApiKey: "test-key" }, route, results, { synthesize: true }, false);
+    ok(resp.answer === "MERGED: fusion + grounded", "hybrid → judge merges (solo-fusion shortcut skipped)");
+    ok(!resp.raw, "hybrid synthesize returns answer, no raw");
+    const judgeInput = (judgeBody?.messages ?? []).map((m) => m.content).join("\n");
+    ok(judgeInput.includes("fusion answer") && judgeInput.includes("grounded answer"), "both seats fed to judge (capability seat not dropped)");
+    ok(judgeInput.includes("https://src.example/a"), "capability citations preserved into judge input");
+    ok(route.used_grounding === true, "realized used_grounding true when grounded seat ok");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log("\nUnit: assemble — REALIZED capability flags (route reflects what fired)");
 {
   const cc = C({ needs_x: true, needs_grounding: true, suggested_panel_n: 2 });

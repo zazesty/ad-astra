@@ -8,17 +8,22 @@ import {
   embedTextForFact,
   loadEmbeddings,
   saveEmbeddings,
+  pruneEmbeddings,
 } from "../build/memoryEmbeddings.js";
 
 const dir = process.env.MEMORY_DIR || "/root/memory";
 const apiKey = process.env.GEMINI_API_KEY;
 
 const { factCount } = await regenerateIndexes(dir);
-let embedded = 0;
 
+// GC + (re)embed. Prune runs regardless of apiKey so orphaned vectors from deleted
+// facts get cleaned even on a no-key regen; re-embed only when a key is present.
+const facts = await loadAllFacts(dir);
+const store = await loadEmbeddings(dir);
+const pruned = pruneEmbeddings(store, facts.map((f) => f.id));
+
+let embedded = 0;
 if (apiKey) {
-  const facts = await loadAllFacts(dir);
-  const store = await loadEmbeddings(dir);
   for (const fact of facts) {
     const vec = await embedFactText(apiKey, embedTextForFact(fact));
     if (vec) {
@@ -26,7 +31,7 @@ if (apiKey) {
       embedded++;
     }
   }
-  await saveEmbeddings(dir, store);
 }
+if (embedded || pruned) await saveEmbeddings(dir, store);
 
-console.log(JSON.stringify({ ok: true, factCount, embedded, dir }));
+console.log(JSON.stringify({ ok: true, factCount, embedded, pruned, dir }));

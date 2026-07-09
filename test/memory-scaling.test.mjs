@@ -7,7 +7,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { regenerateIndexes, loadAllFacts, isActiveFact } from "../build/memory.js";
-import { cosineSimilarity } from "../build/memoryEmbeddings.js";
+import { cosineSimilarity, pruneEmbeddings } from "../build/memoryEmbeddings.js";
 
 let pass = 0;
 let fail = 0;
@@ -44,6 +44,16 @@ console.log("Unit: memory scaling");
 
 check("cosineSimilarity identical", cosineSimilarity([1, 0], [1, 0]) === 1);
 check("cosineSimilarity orthogonal", cosineSimilarity([1, 0], [0, 1]) === 0);
+
+// pruneEmbeddings: orphaned vectors (deleted facts) are GC'd; valid ones survive.
+{
+  const store = { a: [1, 0], b: [0, 1], orphan1: [1, 1], orphan2: [2, 2] };
+  const removed = pruneEmbeddings(store, ["a", "b"]);
+  check("pruneEmbeddings removes orphan count", removed === 2);
+  check("pruneEmbeddings keeps valid ids", "a" in store && "b" in store);
+  check("pruneEmbeddings drops orphan ids", !("orphan1" in store) && !("orphan2" in store));
+  check("pruneEmbeddings no-op when all valid", pruneEmbeddings(store, ["a", "b"]) === 0);
+}
 
 const dir = await mkdtemp(join(tmpdir(), "memory-scale-"));
 try {

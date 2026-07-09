@@ -51,6 +51,22 @@ export async function embedFactText(apiKey: string | undefined, text: string): P
   }
 }
 
+/** Drop vectors whose fact id is no longer present. Vectors are keyed by fact.id and
+ *  only ever read for live facts, so orphans (left behind when a fact file is deleted)
+ *  are dead weight in the sidecar. Pure in-memory GC — mutates `store`, returns the
+ *  number of entries removed. */
+export function pruneEmbeddings(store: EmbeddingsStore, validIds: Iterable<string>): number {
+  const keep = new Set(validIds);
+  let removed = 0;
+  for (const id of Object.keys(store)) {
+    if (!keep.has(id)) {
+      delete store[id];
+      removed++;
+    }
+  }
+  return removed;
+}
+
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (!a.length || a.length !== b.length) return 0;
   let dot = 0;
