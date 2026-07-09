@@ -362,34 +362,47 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
     {
       title: "Research Fanout",
       description:
-        "USAGE: multi-source EVIDENCE gathering — not general deep-thinking. " +
-        "Ideal: factual / current / multi-angle questions that need web and/or X sources " +
-        "(e.g. \"What is the current US federal funds rate range and who said what on X?\"). " +
-        "Avoid: pure tradeoff adjudication, opinion panels, or reasoning-only synthesis " +
-        "(use ask_oracle / ask_panel). Avoid: a single live-X lookup (use grok_x_search). " +
-        "FLOW: classifier decomposes into ≤max_legs grounded sub-queries (default mode = " +
-        "gemini web-grounded; optional grok_x / grok_grounded) → legs run in parallel on " +
-        "provider cores only (no nested tools) → optional synthesis merges into one answer " +
-        "with a union of citations. Legs fail independently; partial results return with " +
-        "degraded:true if some legs miss. Hard ~85s outer budget; multi-leg = multi-call " +
-        "cost; typical healthy runs are tens of seconds. lens/system apply to SYNTHESIS only, " +
-        "not decomposition or leg fetch. synthesize=true (default) = coherent answer+citations; " +
-        "false = raw legs for your own merge.",
+        "USAGE: multi-angle EVIDENCE fanout on a SCOPED research question — not a general " +
+        "deep-thinker, not a live-news wire, not an opinion panel. " +
+        "BEST: multi-hop factual/regional/technical research that benefits from parallel " +
+        "grounded sub-queries (e.g. industry+labor+tech+supply-chain in a region; " +
+        "\"current FOMC rate range with official sources\"). Classifier often plans " +
+        "leaner than max_legs when one answer suffices. " +
+        "AVOID / ROUTE ELSEWHERE: " +
+        "(1) pure or hot breaking-X sentiment → grok_x_search (faster, more reliable than " +
+        "force_x_leg through fanout — X legs under load can timeout the whole call); " +
+        "(2) strategy/opinion/tradeoff adjudication (\"Should we adopt trunk-based dev?\") → " +
+        "ask_oracle or ask_panel; " +
+        "(3) extreme vagueness (\"Tell me about AI\") → re-scope first or expect " +
+        "timeout/shallow routing; " +
+        "(4) trivial textbook constants (\"boiling point of water\") → may " +
+        "grounding_miss fail-loud with degraded:true and no answer (by design, not a bug). " +
+        "FLOW: decompose ≤max_legs → parallel provider-core legs (default gemini web-grounded; " +
+        "optional grok_x / grok_grounded; no nested tools) → synth merges + citation union " +
+        "OR synthesize:false returns raw legs. Legs fail independently; partial return + " +
+        "degraded/slots_status. Hard ~85s outer budget; healthy complex runs often ~30–45s; " +
+        "multi-leg = multi-call cost. lens/system = SYNTHESIS tone only (not routing). " +
+        "Check route.elapsed_ms, legs[].status, citations[], degraded.",
       inputSchema: {
         prompt: z
           .string()
           .refine((s) => s.trim().length > 0, { message: "prompt must not be empty" })
           .describe(
-            "Evidence-seeking research question (multi-source / factual / current). " +
-              "Example good: \"Summarize the latest FOMC rate decision and cite sources.\" " +
-              "Example better as ask_oracle: \"Should we adopt trunk-based development?\"",
+            "Scoped evidence-seeking research question. " +
+              "Good: \"Challenges/opportunities for precision CNC in the East Bay " +
+              "(labor, supply chain, AI/CAM, aerospace/medtech).\" " +
+              "Good: \"Current US federal funds rate target range; cite official sources.\" " +
+              "Bad/vague: \"Tell me about AI.\" " +
+              "Use ask_oracle instead: \"Should we adopt trunk-based development?\" " +
+              "Use grok_x_search instead: pure last-24h X reaction to a breaking event.",
           ),
         synthesize: z
           .boolean()
           .optional()
           .describe(
-            "true (default) = merge legs into one coherent answer + citation union; " +
-              "false = return raw legs only (high-control / you synthesize).",
+            "true (default) = one coherent answer + citation union; " +
+              "false = raw legs only (inspect/decompose further yourself). " +
+              "false is excellent for multi-hop dumps you will merge offline.",
           ),
         max_legs: z
           .number()
@@ -397,11 +410,17 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           .min(1)
           .max(MAX_LEGS_HARD)
           .optional()
-          .describe("Max sub-queries (default 4, hard cap 5). Vague prompts may yield fewer."),
+          .describe(
+            "Max sub-queries (default 4, hard cap 5). Factual single-answer prompts often " +
+              "get fewer legs; multi-hop research may use the full cap.",
+          ),
         lens: z
           .string()
           .optional()
-          .describe("Analytical lens for the final synthesis only (not leg generation)."),
+          .describe(
+            "Synthesis-only frame (e.g. steelman-then-break). Does NOT change leg routing " +
+              "or grounding modes — only final answer structure/tone.",
+          ),
         system: z
           .string()
           .optional()
@@ -413,7 +432,11 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
         force_x_leg: z
           .boolean()
           .optional()
-          .describe("Ensure ≥1 live-X (grok_x) leg when true."),
+          .describe(
+            "Ensure ≥1 live-X (grok_x) leg. Prefer false for pure breaking-news X " +
+              "(use grok_x_search instead) — force_x_leg on hot topics can raise timeout risk " +
+              "under load. Use true when research needs web + X in one fanout.",
+          ),
       },
     },
     async (args: {
