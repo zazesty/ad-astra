@@ -33,7 +33,7 @@ check("familyFromSlug grok", familyFromSlug("grok", "grok-direct") === "grok");
 check("familyFromSlug gemini", familyFromSlug("~google/gemini-pro-latest") === "gemini");
 check("familyFromSlug fusion", familyFromSlug("openrouter/fusion") === "fusion");
 check("classifyError timeout", classifyError("timeout", "seat timed out") === "timeout");
-// B3: bare OR "aborted" is transient, NOT timeout (socket reset ≠ seat timeout).
+// B3: bare OR "aborted" WITHOUT timeout language is transient, NOT seat-timeout.
 check(
   "classifyError OR bare abort → transient_or",
   classifyError("error", "OpenRouter /chat/completions network failure: The operation was aborted") === "transient_or",
@@ -49,6 +49,22 @@ check(
 check(
   "isAttemptTimeoutError timed out → true",
   isAttemptTimeoutError("seat timed out (40000ms)") === true,
+);
+// Kaizen #1: undici AbortSignal.timeout wording (Claude OR-hang forensics 2026-07-09).
+check(
+  "isAttemptTimeoutError aborted due to timeout → true",
+  isAttemptTimeoutError("The operation was aborted due to timeout") === true,
+);
+check(
+  "classifyError aborted due to timeout → timeout",
+  classifyError("error", "The operation was aborted due to timeout") === "timeout",
+);
+check(
+  "classifyError OR wrap aborted due to timeout → timeout",
+  classifyError(
+    "error",
+    "OpenRouter /chat/completions network failure: The operation was aborted due to timeout",
+  ) === "timeout",
 );
 check("classifyError grounding", classifyError("error", "grounding_fired:false") === "grounding_miss");
 

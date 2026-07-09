@@ -19,6 +19,7 @@ import { callGrok, type Grounding } from "./grokCore.js";
 import {
   callGemini,
   callGeminiViaOpenRouter,
+  isTransientError,
   makeGeminiClient,
   type GeminiClient,
   type GeminiTransport,
@@ -35,6 +36,8 @@ import { seatBudgetMs, withTimeout } from "./timeouts.js";
 
 // Grounded gemini on OR can exceed the global 15s per-attempt abort (PK data hit
 // exactly 15s and failed). Panel-only — ungrounded stays at OR_ATTEMPT_TIMEOUT_MS.
+// On OR hang/abort we fail over to direct (same idea as ask_oracle) rather than
+// burning the full 60s attempt with no recovery.
 const PANEL_GROUNDED_OR_ATTEMPT_TIMEOUT_MS = 60_000;
 // A1: outer wall-clock so one stuck grounded seat cannot hold the whole panel
 // until client timeout discards siblings. Per-seat cap still applies via seatBudgetMs.
@@ -164,6 +167,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           error?: string;
           transport?: "or" | "direct";
           timed_out?: boolean;
+          failover_fired?: boolean;
         }) => {
           if (recorded) return;
           recorded = true;
@@ -180,11 +184,14 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             x_search_fired: ok && spec.model === "grok" && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
             reasoning_effort: spec.reasoning_effort ?? "medium",
             latency_ms: Date.now() - t0,
-            failover_fired: false,
-            timed_out: !!extra.timed_out,
+            failover_fired: !!extra.failover_fired,
+            timed_out: !!extra.timed_out || isAttemptTimeoutError(extra.error),
             ok,
             degraded: !ok,
-            error_class: classifyError(ok ? "ok" : extra.timed_out ? "timeout" : "error", extra.error),
+            error_class: classifyError(
+              ok ? "ok" : extra.timed_out || isAttemptTimeoutError(extra.error) ? "timeout" : "error",
+              extra.error,
+            ),
             question_hash: qHash,
             prompt_preview: process.env.METRICS_LOG_PROMPTS === "1" ? spec.prompt : undefined,
           });
@@ -239,6 +246,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           // gemini — transport chosen by GEMINI_TRANSPORT (env). The OpenRouter
           // path (BYOK) handles both ungrounded and grounded specs; grounded forces
           // engine:"native" inside callGeminiViaOpenRouter (real Google grounding).
+          // On OR hang/transient: fail over to direct SDK (kaizen #3, mirrors oracle).
           const geminiOpts = {
             system,
             model: spec.model_slug,
@@ -249,10 +257,9 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
               ? { attempt_timeout_ms: PANEL_GROUNDED_OR_ATTEMPT_TIMEOUT_MS }
               : {}),
           };
-          const callGeminiOnce = () =>
-            geminiTransport === "openrouter"
-              ? callGeminiViaOpenRouter(opts.openrouterApiKey, spec.prompt, geminiOpts)
-              : callGemini(geminiClient, spec.prompt, geminiOpts);
+          const callOrOnce = () =>
+            callGeminiViaOpenRouter(opts.openrouterApiKey, spec.prompt, geminiOpts);
+          const callDirectOnce = () => callGemini(geminiClient, spec.prompt, geminiOpts);
 
           // FAIL LOUD, not soft. Gemini grounding (googleSearch / engine:"native")
           // is model-discretion: the model decides whether to search, so a grounded
@@ -275,29 +282,65 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           // google_search_retrieval on gemini-3.1-pro (the always-execute retrieval
           // tool is Vertex-only), so both transports are inherently AUTO.
           const MAX_GROUNDING_RETRIES = 2;
-          const transport: "or" | "direct" = geminiTransport === "openrouter" ? "or" : "direct";
-          try {
-            let r = await callGeminiOnce();
+
+          /** Run one transport with the zero-citation fail-loud retry contract. */
+          const runWithGroundingContract = async (
+            once: () => Promise<{ text: string; citations: string[] }>,
+            pathLabel: string,
+          ) => {
+            let r = await once();
             if (spec.grounded) {
               for (let attempt = 1; attempt <= MAX_GROUNDING_RETRIES && r.citations.length === 0; attempt++) {
-                console.error(`[ask_panel] gemini grounded miss (0 citations) — retry ${attempt}/${MAX_GROUNDING_RETRIES}. label=${label}`);
-                r = await callGeminiOnce();
+                console.error(
+                  `[ask_panel] gemini grounded miss (0 citations) — retry ${attempt}/${MAX_GROUNDING_RETRIES}. label=${label} path=${pathLabel}`,
+                );
+                r = await once();
               }
               if (r.citations.length === 0) {
                 throw new Error(
                   `grounding_fired:false — Gemini grounded request returned zero citations after ` +
-                    `${MAX_GROUNDING_RETRIES} retries. Refusing to pass back a weights-only answer as if ` +
+                    `${MAX_GROUNDING_RETRIES} retries (${pathLabel}). Refusing to pass back a weights-only answer as if ` +
                     `it were grounded; the answer may be stale/hallucinated. Retry, rephrase to demand ` +
                     `sources, or use a grok spec.`,
                 );
               }
             }
-            record(true, { text: r.text, citations: r.citations, transport });
-            return { text: r.text, citations: r.citations };
+            return r;
+          };
+
+          try {
+            let transport: "or" | "direct" = geminiTransport === "openrouter" ? "or" : "direct";
+            let failover_fired = false;
+            let r: { text: string; citations: string[] };
+
+            if (geminiTransport === "openrouter") {
+              try {
+                r = await runWithGroundingContract(callOrOnce, "or-native");
+              } catch (e) {
+                // Grounding miss is NOT transient — fail loud, do not failover-mask.
+                const msg = (e as Error)?.message ?? String(e);
+                if (msg.includes("grounding_fired:false") || !isTransientError(e)) throw e;
+                console.error(
+                  `[ask_panel] OR transient fail on ${label} — failover → direct-gemini: ${msg}`,
+                );
+                r = await runWithGroundingContract(callDirectOnce, "direct-failover");
+                transport = "direct";
+                failover_fired = true;
+              }
+            } else {
+              r = await runWithGroundingContract(callDirectOnce, "direct");
+            }
+
+            record(true, { text: r.text, citations: r.citations, transport, failover_fired });
+            return { text: r.text, citations: r.citations, failover_fired, transport };
           } catch (e) {
             const msg = (e as Error)?.message ?? String(e);
             const timedOut = isAttemptTimeoutError(msg);
-            record(false, { error: msg, transport, timed_out: timedOut });
+            record(false, {
+              error: msg,
+              transport: geminiTransport === "openrouter" ? "or" : "direct",
+              timed_out: timedOut,
+            });
             throw e;
           }
         } catch (e) {
@@ -327,12 +370,37 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         if (r.status === "fulfilled") {
           const out: Record<string, unknown> = { label, ok: true, text: r.value.text };
           if (r.value.citations?.length) out.citations = r.value.citations;
+          if (r.value.failover_fired) out.failover_fired = true;
+          if (r.value.transport) out.transport = r.value.transport;
           return out;
         }
         return { label, ok: false, error: String(r.reason?.message ?? r.reason) };
       });
 
-      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+      // Kaizen #4 (panel): surface OR hang recovery when siblings still answered.
+      // Happy path stays a bare array (backward compatible). Only wrap when a note
+      // is worth calling out so parsers that expect `[{label,ok,text}]` still work
+      // on clean runs.
+      const anyOk = results.some((r) => r.ok);
+      const anyFail = results.some((r) => !r.ok);
+      const failLooksLikeOrHang = results.some(
+        (r) =>
+          !r.ok &&
+          typeof r.error === "string" &&
+          (isAttemptTimeoutError(r.error) || /openrouter|aborted|timeout/i.test(r.error)),
+      );
+      const anyFailover = results.some((r) => r.ok && r.failover_fired);
+      let recovery_note: string | undefined;
+      if (anyOk && anyFail && failLooksLikeOrHang) {
+        recovery_note =
+          "Some seats stalled (often OpenRouter abort/timeout); others recovered. Partial panel — synthesize from ok seats.";
+      } else if (anyFailover) {
+        recovery_note =
+          "OpenRouter stalled on at least one Gemini seat; direct-gemini failover recovered.";
+      }
+
+      const body = recovery_note ? { recovery_note, results } : results;
+      return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }] };
     },
   );
 }

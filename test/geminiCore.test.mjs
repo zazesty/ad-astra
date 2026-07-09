@@ -109,6 +109,14 @@ console.log("\nUnit: extractDirectCitations (@google/genai groundingMetadata)");
   check("non-transient: 401", isTransientError(new OpenRouterError("auth", 401, false)) === false);
   check("non-transient: plain Error (grounding fail-loud)", isTransientError(new Error("grounding_fired:false")) === false);
   check("non-transient: non-error value", isTransientError("nope") === false && isTransientError(undefined) === false);
+  // Kaizen #2: raw AbortSignal/TimeoutError still triggers OR→direct failover.
+  const te = new Error("The operation was aborted due to timeout");
+  te.name = "TimeoutError";
+  check("transient: raw TimeoutError", isTransientError(te) === true);
+  check(
+    "transient: aborted due to timeout message",
+    isTransientError(new Error("The operation was aborted due to timeout")) === true,
+  );
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

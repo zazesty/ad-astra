@@ -39,6 +39,7 @@ import {
   classifyError,
   familyFromSlug,
   hashQuestion,
+  isAttemptTimeoutError,
   recordSeatMetric,
   type SeatMetricRecord,
 } from "./metrics.js";
@@ -119,6 +120,8 @@ export interface OracleResponse {
   route: RoutePlan;
   slots_status: SlotStatus[];
   degraded: boolean;
+  /** Present when some seats failed (often OR hang) but at least one seat recovered. */
+  recovery_note?: string;
   raw?: RawSeatOutput[];
   answer?: string;
 }
@@ -606,7 +609,9 @@ async function executeSlots(
       } catch (e) {
         const msg = (e as Error)?.message ?? String(e);
         lastMsg = msg;
-        const timedOut = /timed out/i.test(msg);
+        // Use shared classifier so AbortSignal "aborted due to timeout" counts too
+        // (plain /timed out/ missed it → status:error, failover metrics lied).
+        const timedOut = isAttemptTimeoutError(msg);
         // Retry ONLY timeouts, and only on reasoning seats. A non-timeout error is
         // terminal: the in-call transient retry + OR→direct failover already had their
         // shot, and grounding_fired:false is a designed fail-loud, not a re-run.
@@ -653,7 +658,9 @@ function recordOracleMetrics(
       reasoning_effort: r.seat.reasoning_effort,
       latency_ms: r.latency_ms ?? 0,
       failover_fired: !!r.failover_fired,
-      timed_out: r.status === "timeout",
+      // Also true when error text is an AbortSignal timeout but status stayed "error"
+      // before the isAttemptTimeoutError fix (belt + suspenders for mixed deploys).
+      timed_out: r.status === "timeout" || isAttemptTimeoutError(r.error),
       ok: seatOk,
       degraded: !seatOk,
       error_class: classifyError(r.status, r.error),
@@ -714,6 +721,38 @@ export async function assemble(
   route.used_grounding = oks.some((r) => !!r.seat.grounded);
 
   const resp: OracleResponse = { route, slots_status, degraded };
+
+  // Kaizen #4: when OR/gpt/gemini seats die (often 15s AbortSignal hang) but a
+  // Grok-direct seat recovered, say so — callers (Claude) stop reading "broken".
+  if (degraded && oks.length > 0) {
+    const failed = results.filter((r) => r.status !== "ok");
+    const orishFailed = failed.some((r) => {
+      const slug = (r.seat.model_slug || "").toLowerCase();
+      return (
+        r.seat.provider === "openrouter" ||
+        slug.includes("gemini") ||
+        slug.includes("gpt") ||
+        slug.includes("openai") ||
+        slug.includes("openrouter") ||
+        slug.includes("fusion")
+      );
+    });
+    const grokRecovered = oks.some(
+      (r) => r.seat.provider === "grok-direct" || /grok/i.test(r.seat.model_slug || ""),
+    );
+    const lookedLikeOrHang = failed.some(
+      (r) => isAttemptTimeoutError(r.error) || /openrouter|aborted|timeout/i.test(r.error || ""),
+    );
+    if (orishFailed && grokRecovered && lookedLikeOrHang) {
+      resp.recovery_note =
+        "OpenRouter stalled (seat timeout/abort); Grok-direct recovered. " +
+        "Partial panel — trust Grok + any other ok seats; failed OR seats are not model 'down'.";
+    } else if (orishFailed && oks.length > 0 && lookedLikeOrHang) {
+      resp.recovery_note =
+        "Some OpenRouter seats stalled or aborted; other seats recovered. Response is partial (degraded).";
+    }
+  }
+
   if (ov.synthesize) {
     // Solo fusion + synthesize → return fusion text directly (it already ran panel+judge).
     // Gate on ALL ok seats, not just reasoning: fusion always REPLACES the whole reasoning

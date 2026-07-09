@@ -54,15 +54,19 @@ export function familyFromSlug(modelSlug: string, provider?: string): string {
  * True when an error message looks like a seat/fetch *timeout* (not a generic abort).
  * Bare "aborted" / socket-reset must NOT count as timeout — that inflated timeout_rate
  * and biased the panel-failover gate (B3). Require explicit timeout language.
+ *
+ * Node/undici AbortSignal.timeout surfaces:
+ *   "The operation was aborted due to timeout"  (TimeoutError)
+ * which historically missed the "timed out" regex → metrics said "other" and
+ * oracle seat status stayed "error" instead of "timeout".
  */
 export function isAttemptTimeoutError(error?: string): boolean {
   const msg = (error || "").toLowerCase();
   // Explicit timeout wording (withTimeout, AbortSignal.timeout, DOM TimeoutError).
   if (/timed out|timeouterror|signal timed out/.test(msg)) return true;
-  // AbortError alone is ambiguous (cancel / reset / hang-up); only count when
-  // the message also says timeout (AbortSignal.timeout surfaces both).
+  // AbortSignal.timeout / undici: "aborted due to timeout" (no "timed out" substring).
+  if (msg.includes("aborted") && msg.includes("timeout")) return true;
   if (msg.includes("aborterror") && msg.includes("timeout")) return true;
-  if (msg.includes("openrouter") && msg.includes("aborted") && msg.includes("timeout")) return true;
   return false;
 }
 
@@ -70,9 +74,15 @@ export function classifyError(status: string, error?: string): string | undefine
   if (status === "timeout") return "timeout";
   const msg = (error || "").toLowerCase();
   if (!msg) return status === "ok" ? undefined : "other";
+  // Prefer timeout over transient_or when the message is clearly a wall-clock abort
+  // (seat withTimeout OR AbortSignal.timeout) — dashboard timeout_rate stays honest.
   if (isAttemptTimeoutError(error)) return "timeout";
   if (msg.includes("grounding_fired:false")) return "grounding_miss";
   if (msg.includes("openrouter") && (msg.includes("429") || /\b5\d{2}\b/.test(msg) || msg.includes("transient") || msg.includes("abort") || msg.includes("timeout"))) {
+    return "transient_or";
+  }
+  // Raw AbortSignal / network blips without the OpenRouter prefix still look like OR hangs.
+  if ((msg.includes("aborted") || msg.includes("econnreset") || msg.includes("fetch failed")) && !msg.includes("grounding")) {
     return "transient_or";
   }
   if (/\b4\d{2}\b/.test(msg) || msg.includes("400") || msg.includes("401") || msg.includes("403") || msg.includes("404")) {

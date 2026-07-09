@@ -59,11 +59,28 @@ export class OpenRouterError extends Error {
   }
 }
 
-/** True when an error is an OpenRouter availability failure worth failing over on
- *  (429/5xx/network/timeout). A grounding_fired:false fail-loud or a 4xx client
- *  error is NOT transient — callers must rethrow those, not fail over. */
+/**
+ * True when an error is an OpenRouter availability failure worth failing over on
+ * (429/5xx/network/timeout). A grounding_fired:false fail-loud or a 4xx client
+ * error is NOT transient — callers must rethrow those, not fail over.
+ *
+ * Also treats raw AbortSignal/TimeoutError as transient: if a timeout ever
+ * escapes the OpenRouterError wrapper (or instanceof fails across bundles),
+ * we still want OR→direct failover rather than a dead seat at exactly 15s.
+ */
 export function isTransientError(e: unknown): boolean {
-  return e instanceof OpenRouterError && e.transient;
+  if (e instanceof OpenRouterError) return e.transient;
+  if (e == null || typeof e !== "object") return false;
+  const name = (e as Error).name ?? "";
+  const msg = String((e as Error).message ?? e).toLowerCase();
+  // Designed fail-loud — never failover.
+  if (msg.includes("grounding_fired:false")) return false;
+  // 4xx-ish client errors without OpenRouterError wrapper.
+  if (/\b(400|401|403|404)\b/.test(msg) && !msg.includes("timeout")) return false;
+  if (name === "TimeoutError" || name === "AbortError") return true;
+  if (msg.includes("aborted") && msg.includes("timeout")) return true;
+  if (msg.includes("network failure") && (msg.includes("timeout") || msg.includes("aborted"))) return true;
+  return false;
 }
 
 // In-call retry budget for transient OR failures (429/5xx/network/timeout).

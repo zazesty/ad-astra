@@ -299,5 +299,59 @@ console.log("\nUnit: assemble — REALIZED capability flags (route reflects what
   ok(resp.route.used_grounding === true, "ok grounded seat → used_grounding stays true");
 }
 
+console.log("\nUnit: assemble — recovery_note when OR dies and Grok recovers");
+{
+  const cc = C({ suggested_panel_n: 3 });
+  const seats = buildSlots(cc, {});
+  const route = buildRoutePlan(seats, cc, "classifier", "m");
+  // Force a grok-direct + openrouter gemini pair if not already present.
+  const grokSeat = seats.find((s) => s.provider === "grok-direct") || {
+    id: "reason-grok",
+    provider: "grok-direct",
+    model_slug: "grok",
+    reasoning_effort: "high",
+    lens: "default",
+  };
+  const gptSeat = {
+    id: "reason-gpt",
+    provider: "openrouter",
+    model_slug: "openai/gpt-5.5",
+    reasoning_effort: "high",
+    lens: "default",
+  };
+  const gemSeat = {
+    id: "gemini-grounded",
+    provider: "openrouter",
+    model_slug: "~google/gemini-pro-latest",
+    grounded: true,
+    reasoning_effort: "high",
+    lens: "default",
+  };
+  const resp = await assemble(
+    {},
+    route,
+    [
+      { seat: grokSeat, status: "ok", text: "grok lived", transport: "direct" },
+      {
+        seat: gptSeat,
+        status: "timeout",
+        error: "The operation was aborted due to timeout",
+      },
+      {
+        seat: gemSeat,
+        status: "timeout",
+        error: "OpenRouter /chat/completions network failure: The operation was aborted due to timeout",
+      },
+    ],
+    {},
+    false,
+  );
+  ok(resp.degraded === true, "recovery_note case is degraded");
+  ok(
+    typeof resp.recovery_note === "string" && /OpenRouter stalled/i.test(resp.recovery_note),
+    "recovery_note names OpenRouter stall + Grok recovery",
+  );
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
