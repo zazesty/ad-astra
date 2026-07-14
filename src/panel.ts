@@ -41,8 +41,18 @@ import { seatBudgetMs, withTimeout } from "./timeouts.js";
 const PANEL_GROUNDED_OR_ATTEMPT_TIMEOUT_MS = 60_000;
 // A1: outer wall-clock so one stuck grounded seat cannot hold the whole panel
 // until client timeout discards siblings. Per-seat cap still applies via seatBudgetMs.
-const PANEL_OUTER_BUDGET_MS = 70_000;
-const PANEL_SEAT_CAP_MS = 60_000;
+//
+// Per-model seat caps sized to observed p99 (get_metrics, 14d): grok p99 ~78s,
+// gemini grounded p99 ~96s. The old flat 60s cap pinned grounded-gemini p50 at
+// exactly 60s (half the seats slamming the ceiling) AND made the OR→direct
+// failover unreachable — a 60s OR attempt against a 70s outer left ~10s for the
+// direct leg, so failover_fired stayed 0. Gemini's 100s cap leaves ~40s for the
+// direct-failover leg after a 60s OR attempt, so recovery can actually fire.
+const PANEL_GROK_SEAT_CAP_MS = 80_000;
+const PANEL_GEMINI_SEAT_CAP_MS = 100_000;
+// Outer must fit the slowest per-model seat (gemini 100s) plus scheduling margin;
+// seats run concurrently so this is ~max seat, not the sum.
+const PANEL_OUTER_BUDGET_MS = 110_000;
 
 type RegisterOpts = {
   xaiApiKey: string | undefined;
@@ -197,7 +207,8 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           });
         };
 
-        const budget = seatBudgetMs(panelT0, PANEL_OUTER_BUDGET_MS, PANEL_SEAT_CAP_MS);
+        const seatCap = spec.model === "grok" ? PANEL_GROK_SEAT_CAP_MS : PANEL_GEMINI_SEAT_CAP_MS;
+        const budget = seatBudgetMs(panelT0, PANEL_OUTER_BUDGET_MS, seatCap);
         if (budget < 500) {
           const msg = `${seatId} timed out after 0ms (panel outer budget exhausted)`;
           record(false, { error: msg, transport: defaultTransport, timed_out: true });
