@@ -137,14 +137,11 @@ export function capEffort(effort: Effort, max?: Effort): Effort {
 // live 2026-06-24). Single source of truth = geminiCore's export, so the
 // gemini-model-check monitor covers oracle's seats too.
 const GEMINI_PRO_SLUG = DEFAULT_OPENROUTER_GEMINI_MODEL;
-// Pinned OpenAI flagship (verified in the OR catalog 2026-06-26) — the
-// non-Google, non-Grok cross-family dissenting voice. Promoted to the #3 slot
-// in BOTH pools on 2026-06-26 (owner call): a Claude-caller panel of 2/3/4
-// seats seats gemini → grok → gpt → openrouter/auto (n=1 keeps the plain auto-led
-// wildcard), so escalating to a panel
-// buys three genuine cross-family voices before reaching the wildcard. Pinned
-// (not `~openai/gpt-latest`) so a named seat is a known, stable model.
-const GPT_SLUG = "openai/gpt-5.5";
+// Pinned OpenAI voice (non-Google, non-Grok) — #3 in both reasoning pools so a
+// multi-seat panel gets real cross-family spread before `openrouter/auto`.
+// Not `~openai/gpt-latest`: named seat stays stable. Default is GPT-5.6 Terra
+// (~5.5-competitive, lower cost). Bump GPT_SLUG deliberately when catalog moves.
+const GPT_SLUG = "openai/gpt-5.6-terra";
 // Single-seat default: at n=1 diversity is meaningless, so the cheap/fast wildcard
 // leads. `openrouter/auto` lets OR pick per-prompt.
 const DEFAULT_REASONING_POOL = ["openrouter/auto", GEMINI_PRO_SLUG];
@@ -965,7 +962,7 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         exclude_family: z
           .string()
           .optional()
-          .describe("Drop same-FAMILY reasoning seats when the CALLER is that family, so a model doesn't consult itself. Pass \"grok\" when Grok is the caller: the contrarian grok-direct reasoning seat is replaced by genuine cross-family dissent — gemini → gpt-5.5 → openrouter/auto (for 1/2/3+ seats). Capability seats (live-X, grounding) are EXEMPT — a grok-x seat is data retrieval, not Grok's opinion, so it stays. Only \"grok\" is meaningful today. Ignored when engine:\"fusion\"."),
+          .describe("Drop same-FAMILY reasoning seats when the CALLER is that family, so a model doesn't consult itself. Pass \"grok\" when Grok is the caller: the contrarian grok-direct reasoning seat is replaced by genuine cross-family dissent — gemini → gpt (Terra) → openrouter/auto (for 1/2/3+ seats). Capability seats (live-X, grounding) are EXEMPT — a grok-x seat is data retrieval, not Grok's opinion, so it stays. Only \"grok\" is meaningful today. Ignored when engine:\"fusion\"."),
         engine: z
           .enum(["fusion"])
           .optional()

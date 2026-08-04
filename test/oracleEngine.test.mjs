@@ -315,7 +315,7 @@ console.log("\nUnit: assemble — recovery_note when OR dies and Grok recovers")
   const gptSeat = {
     id: "reason-gpt",
     provider: "openrouter",
-    model_slug: "openai/gpt-5.5",
+    model_slug: "openai/gpt-5.6-terra",
     reasoning_effort: "high",
     lens: "default",
   };
