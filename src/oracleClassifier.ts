@@ -23,6 +23,10 @@
 
 import { Type } from "@google/genai";
 import { callOpenRouter, callGemini, makeGeminiClient, isTransientError } from "./geminiCore.js";
+import {
+  GEMINI_FLASH_LITE_DIRECT,
+  GEMINI_FLASH_LITE_OR,
+} from "./modelPins.js";
 
 export type Difficulty = "trivial" | "simple" | "moderate" | "hard";
 export type Effort = "low" | "medium" | "high";
@@ -65,20 +69,15 @@ export class ClassifierError extends Error {
   }
 }
 
-// Pinned for latency (flash-lite = fastest/cheapest tier). Cascade (2026-08):
-//   primary google/gemini-3.5-flash-lite → OR fallback google/gemini-3.1-flash-lite
-//   (2.5 flash-lite dropped). research_fanout reuses this pin for leg *decomposition*
-//   only — evidence limbs are grounded gemini-pro / grok, not flash-lite.
+// Flash-lite pin SSOT: modelPins.GEMINI_FLASH_LITE_* (bump VER there only).
+// Hot path: OR primary (same gen) → on *transient* OR fail → direct SDK same gen
+// → prefilter if both die. No older-gen OR models[] cascade (streamlined 2026-08).
+// research_fanout reuses for leg *decomposition* only — limbs are pro/grounded.
 // No `:free` slugs — rate-limited + latency-unstable.
-export const CLASSIFIER_MODEL = "google/gemini-3.5-flash-lite";
-export const CLASSIFIER_FALLBACK_MODELS = ["google/gemini-3.1-flash-lite"];
-// Direct-SDK twin of CLASSIFIER_MODEL (no OpenRouter `google/` namespace) for the
-// OR→direct failover: if the OpenRouter GATEWAY is down, the OR fallback list
-// dies with it (both ride one OR request), so we re-classify via @google/genai
-// directly — an independent path that keeps FULL routing quality through an OR
-// outage instead of dropping to the regex prefilter. Measured ~1-2s, on par with
-// OR (2026-06-25), so this costs nothing on the happy path (only fires on OR fail).
-export const CLASSIFIER_MODEL_DIRECT = "gemini-3.5-flash-lite";
+export const CLASSIFIER_MODEL = GEMINI_FLASH_LITE_OR;
+/** Empty: callOpenRouter only sends `models` when length > 0. Kept for import compat. */
+export const CLASSIFIER_FALLBACK_MODELS: string[] = [];
+export const CLASSIFIER_MODEL_DIRECT = GEMINI_FLASH_LITE_DIRECT;
 
 // Regex SEEDS only (spec §1) — these never decide; the classifier does, and they
 // re-surface only as the fail-loud fallback route's capability seats.

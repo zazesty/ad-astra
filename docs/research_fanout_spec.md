@@ -184,7 +184,7 @@ Reuse: `callGrok`, `callOpenRouter`/`callGemini`, `withTimeout` (extract shared 
 
 ### 4.2 Decomposer
 
-- Model: same flash-lite pin as oracle classifier (`google/gemini-3.5-flash-lite` + 3.1 fallback).
+- Model: same flash-lite pin as oracle classifier (`modelPins.GEMINI_FLASH_LITE_*`, 3.5).
 - Structured JSON: `{ legs: LegPlan[] }` with 1..max_legs.
 - System prompt: split into **independent evidence-seeking** sub-questions; avoid opinion/meta legs; tag mode; no more than max_legs.
 - On parse/transport failure → `fallback_single`.
