@@ -393,10 +393,10 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
         "\"current FOMC rate range with official sources\"). Classifier often plans " +
         "leaner than max_legs when one answer suffices. " +
         "AVOID / ROUTE ELSEWHERE: " +
-        "(1) pure or hot breaking-X sentiment → grok_x_search (faster, more reliable than " +
-        "force_x_leg through fanout — X legs under load can timeout the whole call); " +
+        "(1) pure or hot breaking-X sentiment → ask_panel model:grok grounded:true " +
+        "(lighter than force_x_leg through fanout — X legs under load can timeout the whole call); " +
         "(2) strategy/opinion/tradeoff adjudication (\"Should we adopt trunk-based dev?\") → " +
-        "ask_oracle or ask_panel; " +
+        "ask_consortium or ask_panel; " +
         "(3) extreme vagueness (\"Tell me about AI\") → re-scope first or expect " +
         "timeout/shallow routing; " +
         "(4) trivial textbook constants (\"boiling point of water\") → may " +
@@ -417,8 +417,8 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
               "(labor, supply chain, AI/CAM, aerospace/medtech).\" " +
               "Good: \"Current US federal funds rate target range; cite official sources.\" " +
               "Bad/vague: \"Tell me about AI.\" " +
-              "Use ask_oracle instead: \"Should we adopt trunk-based development?\" " +
-              "Use grok_x_search instead: pure last-24h X reaction to a breaking event.",
+              "Use ask_consortium instead: \"Should we adopt trunk-based development?\" " +
+              "Use ask_panel grok+grounded for pure last-24h X reaction.",
           ),
         synthesize: z
           .boolean()
@@ -427,7 +427,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
             "true (default) = one coherent answer + citation union; " +
               "false = raw legs only (inspect/decompose further yourself). " +
               "false is excellent for multi-hop dumps you will merge offline. " +
-              "(NOTE: ask_oracle's synthesize defaults to the OPPOSITE — false.)",
+              "(NOTE: ask_consortium's synthesize defaults to the OPPOSITE — false.)",
           ),
         max_legs: z
           .number()
@@ -459,8 +459,8 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           .optional()
           .describe(
             "Ensure ≥1 live-X (grok_x) leg. Prefer false for pure breaking-news X " +
-              "(use grok_x_search instead) — force_x_leg on hot topics can raise timeout risk " +
-              "under load. Use true when research needs web + X in one fanout.",
+              "(use ask_panel model:grok grounded:true instead) — force_x_leg on hot topics " +
+              "can raise timeout risk under load. Use true when research needs web + X in one fanout.",
           ),
       },
     },

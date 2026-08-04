@@ -8,10 +8,9 @@
  */
 export const MCP_TOOLS = [
   "get_odds",
-  "grok_x_search",
   "ask_panel",
   "get_news_digest",
-  "ask_oracle",
+  "ask_consortium",
   "memory_search",
   "memory_retrieve",
   "memory_upsert",

@@ -3,7 +3,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { getOdds } from "./oddsTool.js";
-import { registerGrokXSearch } from "./grokXSearch.js";
 import { registerAskPanel } from "./panel.js";
 import { registerNewsDigest } from "./newsDigest.js";
 import { registerAskOracle } from "./oracleEngine.js";
@@ -11,7 +10,6 @@ import { registerMemoryTools, loadMemoryIndexRaw } from "./memory.js";
 import { loadLensesRaw } from "./lenses.js";
 import { registerGetMetrics } from "./metrics.js";
 import { registerResearchFanout } from "./researchFanout.js";
-import { DEFAULT_MODEL } from "./grokCore.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -53,7 +51,6 @@ function buildServer() {
     }
   );
 
-  registerGrokXSearch(server, { apiKey: XAI_API_KEY, baseUrl: XAI_BASE_URL, model: DEFAULT_MODEL });
   registerAskPanel(server, {
     xaiApiKey: XAI_API_KEY,
     geminiApiKey: GEMINI_API_KEY,
@@ -73,8 +70,8 @@ function buildServer() {
     xaiBaseUrl: XAI_BASE_URL,
   });
 
-  // Auto-routing front door (classify → route → fan out → assemble). Ships beside
-  // ask_panel on the same URL; reuses the same Grok-direct + OpenRouter cores.
+  // Auto-routing consortium (classify → route → fan out → assemble). Tool name:
+  // ask_consortium. Ships beside ask_panel; reuses Grok-direct + OpenRouter cores.
   registerAskOracle(server, {
     xaiApiKey: XAI_API_KEY,
     geminiApiKey: GEMINI_API_KEY,

@@ -62,7 +62,7 @@ check(
   `no extra tools (extra=${extra.join(",") || "none"})`,
   extra.length === 0,
 );
-check("count is at least 11 (current ship)", MCP_TOOL_COUNT >= 11);
+check("count is at least 10 (current ship)", MCP_TOOL_COUNT >= 10);
 
 console.log(`\n  surface: ${MCP_TOOL_COUNT} tools — ${MCP_TOOLS.join(", ")}`);
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -116,28 +116,22 @@ async function callTool(name, args) {
 }
 const isError = (r) => r.error != null || r.result?.isError === true;
 
-// 7. grok_x_search empty query -> validation error (no billed call)
-{
-  const r = await callTool("grok_x_search", { query: "" });
-  check("grok_x_search empty query -> error", isError(r));
-}
-
-// 8. grok_x_search malformed date -> validation error (no billed call)
-{
-  const r = await callTool("grok_x_search", { query: "fed rate decision", from_date: "06-01-2026" });
-  check("grok_x_search malformed from_date -> error", isError(r));
-}
-
-// 9. ask_panel empty specs -> validation error (no billed call)
+// 7. ask_panel empty specs -> validation error (no billed call)
 {
   const r = await callTool("ask_panel", { specs: [] });
   check("ask_panel empty specs -> error", isError(r));
 }
 
-// 10. ask_panel spec with empty prompt -> validation error (no billed call)
+// 8. ask_panel spec with empty prompt -> validation error (no billed call)
 {
   const r = await callTool("ask_panel", { specs: [{ model: "grok", prompt: "" }] });
   check("ask_panel empty prompt -> error", isError(r));
+}
+
+// 9. ask_consortium empty prompt -> validation error (no billed call)
+{
+  const r = await callTool("ask_consortium", { prompt: "" });
+  check("ask_consortium empty prompt -> error", isError(r));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

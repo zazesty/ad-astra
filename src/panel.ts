@@ -5,13 +5,13 @@
  * wall-clock: total latency is the slowest single spec, not the sum.
  *
  * A 1-element spec array is the single-query path (this tool replaced the old
- * standalone ask_grok / ask_gemini). grok_x_search stays its own dedicated tool
- * (distinct citations contract + billing profile).
+ * standalone ask_grok / ask_gemini). Live-X is model:grok + grounded:true
+ * (auto contract). OpenAI is OR-only (pinned Terra slug).
  *
  * One spec failing must not nuke the others — we use an allSettled-style runner
  * (mapLimit) with a small concurrency cap so large batches don't trip
- * per-provider rate limits. All Grok/Gemini traffic flows through the shared
- * callGrok / callGemini cores (no duplicated request logic).
+ * per-provider rate limits. Traffic flows through callGrok / callGemini /
+ * callOpenRouter (no duplicated request logic).
  */
 
 import { z } from "zod";
@@ -19,6 +19,7 @@ import { callGrok, type Grounding } from "./grokCore.js";
 import {
   callGemini,
   callGeminiViaOpenRouter,
+  callOpenRouter,
   isTransientError,
   makeGeminiClient,
   type GeminiClient,
@@ -33,6 +34,7 @@ import {
   recordSeatMetric,
 } from "./metrics.js";
 import { seatBudgetMs, withTimeout } from "./timeouts.js";
+import { GPT_OPENROUTER_SLUG } from "./modelPins.js";
 
 // Grounded gemini on OR can exceed the global 15s per-attempt abort (PK data hit
 // exactly 15s and failed). Panel-only — ungrounded stays at OR_ATTEMPT_TIMEOUT_MS.
@@ -50,6 +52,8 @@ const PANEL_GROUNDED_OR_ATTEMPT_TIMEOUT_MS = 60_000;
 // direct-failover leg after a 60s OR attempt, so recovery can actually fire.
 const PANEL_GROK_SEAT_CAP_MS = 80_000;
 const PANEL_GEMINI_SEAT_CAP_MS = 100_000;
+// OpenAI via OR is usually faster than grounded gemini; keep headroom for OR stalls.
+const PANEL_OPENAI_SEAT_CAP_MS = 80_000;
 // Outer must fit the slowest per-model seat (gemini 100s) plus scheduling margin;
 // seats run concurrently so this is ~max seat, not the sum.
 const PANEL_OUTER_BUDGET_MS = 110_000;
@@ -97,8 +101,13 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
 
   const specSchema = z.object({
     model: z
-      .enum(["grok", "gemini"])
-      .describe("Which model backend answers this spec. 'grok' (xAI) leans contrarian/independent; 'gemini' (Google) is strong at reasoning and has the best live web grounding."),
+      .enum(["grok", "gemini", "openai"])
+      .describe(
+        "Backend for this spec. 'grok' (xAI, direct) — contrarian; grounded:true searches X " +
+          "(+web if include_web). 'gemini' (Google) — strong reasoning + best live web grounding. " +
+          "'openai' (OpenRouter only, pinned gpt-5.6-terra) — third-family voice; no native web/X " +
+          "grounding (grounded:true errors).",
+      ),
     prompt: z
       .string()
       .refine((s) => s.trim().length > 0, { message: "prompt must not be empty or whitespace-only" })
@@ -110,7 +119,11 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     grounded: z
       .boolean()
       .optional()
-      .describe("Back the answer with LIVE web search. For ANYTHING factual/current (news, prices, stats, people, 'latest' events, or facts past training cutoff) set true. Gemini → Google Search; Grok → searches X (+web if include_web). Grok grounds in 'auto' mode (it decides whether to search; a search is billed only if it actually runs). Default false."),
+      .describe(
+        "Back the answer with LIVE retrieval. For ANYTHING factual/current set true. " +
+          "Gemini → Google Search; Grok → X (+web if include_web), auto mode (search only if needed). " +
+          "openai → not supported (errors). Default false.",
+      ),
     include_web: z
       .boolean()
       .optional()
@@ -123,7 +136,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     reasoning_effort: z
       .enum(["low", "medium", "high"])
       .optional()
-      .describe("How hard the model thinks before answering (low|medium|high). Defaults to high for both Gemini and Grok (Grok grounded or ungrounded); all three levels are honored."),
+      .describe("How hard the model thinks before answering (low|medium|high). Defaults to high for Gemini/Grok/OpenAI; all three levels are honored."),
     temperature: z
       .number()
       .optional()
@@ -131,7 +144,11 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     model_slug: z
       .string()
       .optional()
-      .describe("Advanced: override the exact model id with a specific grok-*/gemini-* slug (e.g. a flash/mini variant for cheap fast calls). Omit unless you know the exact slug — the server default for the chosen backend is the right choice almost always."),
+      .describe(
+        "Advanced: override the exact model id (grok-*, gemini-*, or OpenRouter openai/* slug). " +
+          "Omit unless you know the exact slug — server defaults are almost always right " +
+          "(openai defaults to pinned Terra).",
+      ),
   });
 
   server.registerTool(
@@ -139,18 +156,16 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     {
       title: "Ask Panel (multi-model)",
       description:
-        "Ask one or more models and get their raw, labeled answers back for YOU to synthesize. " +
-        "Pass an array of specs; they run CONCURRENTLY, so asking 3 models costs the wall-clock of " +
-        "the slowest one, not the sum. Use a 1-spec array for a single model (this is the way to ask " +
-        "Grok or Gemini one question). Use multiple specs for a second opinion / contrarian check / " +
-        "cross-model panel — e.g. one Grok + one Gemini, or the same model at two temperatures. " +
-        "Each spec independently picks the backend ('grok'|'gemini'), whether to ground on live web " +
-        "search, a lens, and a temperature. Results come back in input order, each tagged with its label and an " +
-        "ok flag; one spec failing does NOT fail the others. This is the HAND-PICK tool — you name the exact " +
-        "members (model + prompt + grounding + lens + temperature each); ask_oracle is the auto-routing " +
-        "counterpart that picks the panel for you. This tool gathers — it does not judge; " +
-        "synthesis is your job. (For a citations-first live X search with a no-results-is-an-error " +
-        "contract, use grok_x_search instead.)",
+        "HAND-PICK one or more models and get raw, labeled answers back for YOU to synthesize. " +
+        "Specs run CONCURRENTLY (wall-clock ≈ slowest seat, not the sum). 1-spec = single call " +
+        "(the way to ask Grok, Gemini, or OpenAI one question). Multi-spec = second opinions / " +
+        "cross-family panel (e.g. grok + gemini + openai, or same model at two temps). " +
+        "Each spec picks model ('grok'|'gemini'|'openai'), optional live grounding (gemini web / " +
+        "grok X; openai cannot ground), lens, and temperature. Results stay in input order with " +
+        "ok flags; one seat failing does NOT fail siblings. This tool GATHERS — it does not judge. " +
+        "Auto-routing counterpart: ask_consortium (classifies and picks seats for you). " +
+        "Live-X sentiment: model:'grok' grounded:true (citations when search fires). " +
+        "Strategy/tradeoffs you want auto-routed → ask_consortium; multi-hop evidence → research_fanout.",
       inputSchema: {
         specs: z
           .array(specSchema)
@@ -167,7 +182,17 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         const seatId = `panel-${idx}-${label}`;
         const qHash = hashQuestion(spec.prompt);
         const defaultTransport: "or" | "direct" =
-          spec.model === "grok" ? "direct" : geminiTransport === "openrouter" ? "or" : "direct";
+          spec.model === "grok"
+            ? "direct"
+            : spec.model === "openai"
+              ? "or"
+              : geminiTransport === "openrouter"
+                ? "or"
+                : "direct";
+        const defaultSlug =
+          spec.model === "openai"
+            ? spec.model_slug || GPT_OPENROUTER_SLUG
+            : spec.model_slug || spec.model;
         // Single record path for the whole seat (incl. applyLens failures — B2).
         // degraded is per-seat (ok===false), not run-level (B1).
         let recorded = false;
@@ -178,6 +203,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           transport?: "or" | "direct";
           timed_out?: boolean;
           failover_fired?: boolean;
+          model_slug?: string;
         }) => {
           if (recorded) return;
           recorded = true;
@@ -186,8 +212,13 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             tool: "panel",
             route_mode: "panel",
             seat_id: seatId,
-            family: spec.model === "grok" ? "grok" : familyFromSlug(spec.model_slug || "gemini"),
-            model_slug: spec.model_slug || spec.model,
+            family:
+              spec.model === "grok"
+                ? "grok"
+                : spec.model === "openai"
+                  ? "openai"
+                  : familyFromSlug(extra.model_slug || defaultSlug),
+            model_slug: extra.model_slug || defaultSlug,
             transport: extra.transport ?? defaultTransport,
             grounded_requested: !!spec.grounded,
             grounding_fired: ok && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
@@ -207,7 +238,12 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           });
         };
 
-        const seatCap = spec.model === "grok" ? PANEL_GROK_SEAT_CAP_MS : PANEL_GEMINI_SEAT_CAP_MS;
+        const seatCap =
+          spec.model === "grok"
+            ? PANEL_GROK_SEAT_CAP_MS
+            : spec.model === "openai"
+              ? PANEL_OPENAI_SEAT_CAP_MS
+              : PANEL_GEMINI_SEAT_CAP_MS;
         const budget = seatBudgetMs(panelT0, PANEL_OUTER_BUDGET_MS, seatCap);
         if (budget < 500) {
           const msg = `${seatId} timed out after 0ms (panel outer budget exhausted)`;
@@ -254,6 +290,40 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
               throw e;
             }
           }
+
+          if (spec.model === "openai") {
+            if (spec.grounded) {
+              const msg =
+                "openai seat has no native web/X grounding — use model:'gemini' grounded:true " +
+                "(web) or model:'grok' grounded:true (X), or drop grounded for weights-only.";
+              record(false, { error: msg, transport: "or", model_slug: defaultSlug });
+              throw new Error(msg);
+            }
+            try {
+              const r = await callOpenRouter(opts.openrouterApiKey, defaultSlug, spec.prompt, {
+                system,
+                reasoning_effort: spec.reasoning_effort,
+                temperature: spec.temperature,
+              });
+              record(true, {
+                text: r.text,
+                citations: r.citations,
+                transport: "or",
+                model_slug: defaultSlug,
+              });
+              return { text: r.text, citations: r.citations, transport: "or" as const };
+            } catch (e) {
+              const msg = (e as Error)?.message ?? String(e);
+              record(false, {
+                error: msg,
+                transport: "or",
+                timed_out: isAttemptTimeoutError(msg),
+                model_slug: defaultSlug,
+              });
+              throw e;
+            }
+          }
+
           // gemini — transport chosen by GEMINI_TRANSPORT (env). The OpenRouter
           // path (BYOK) handles both ungrounded and grounded specs; grounded forces
           // engine:"native" inside callGeminiViaOpenRouter (real Google grounding).
