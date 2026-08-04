@@ -8,7 +8,7 @@
  * fallback when the classifier can't be reached/parsed.
  *
  *   prefilter(prompt)  → regex SEEDS (needs_x / needs_grounding); never decides.
- *   classify(key,p)    → gemini-3.1-flash-lite via OpenRouter, structured JSON.
+ *   classify(key,p)    → gemini-3.5-flash-lite via OpenRouter, structured JSON.
  *                        THROWS ClassifierError on transport/parse failure so the
  *                        orchestrator can fall back to a prefilter-seeded route
  *                        with degraded:true (spec §2 fail-loud).
@@ -65,18 +65,20 @@ export class ClassifierError extends Error {
   }
 }
 
-// Pinned for latency (flash-lite = fastest/cheapest tier); fallback hardens the
-// hot path against the pinned slug being unavailable (spec §2). No `:free` slugs —
-// rate-limited + latency-unstable.
-export const CLASSIFIER_MODEL = "google/gemini-3.1-flash-lite";
-export const CLASSIFIER_FALLBACK_MODELS = ["google/gemini-2.5-flash-lite"];
+// Pinned for latency (flash-lite = fastest/cheapest tier). Cascade (2026-08):
+//   primary google/gemini-3.5-flash-lite → OR fallback google/gemini-3.1-flash-lite
+//   (2.5 flash-lite dropped). research_fanout reuses this pin for leg *decomposition*
+//   only — evidence limbs are grounded gemini-pro / grok, not flash-lite.
+// No `:free` slugs — rate-limited + latency-unstable.
+export const CLASSIFIER_MODEL = "google/gemini-3.5-flash-lite";
+export const CLASSIFIER_FALLBACK_MODELS = ["google/gemini-3.1-flash-lite"];
 // Direct-SDK twin of CLASSIFIER_MODEL (no OpenRouter `google/` namespace) for the
-// OR→direct failover: if the OpenRouter GATEWAY is down, the 2.5 fallback above
+// OR→direct failover: if the OpenRouter GATEWAY is down, the OR fallback list
 // dies with it (both ride one OR request), so we re-classify via @google/genai
 // directly — an independent path that keeps FULL routing quality through an OR
 // outage instead of dropping to the regex prefilter. Measured ~1-2s, on par with
 // OR (2026-06-25), so this costs nothing on the happy path (only fires on OR fail).
-export const CLASSIFIER_MODEL_DIRECT = "gemini-3.1-flash-lite";
+export const CLASSIFIER_MODEL_DIRECT = "gemini-3.5-flash-lite";
 
 // Regex SEEDS only (spec §1) — these never decide; the classifier does, and they
 // re-surface only as the fail-loud fallback route's capability seats.

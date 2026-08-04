@@ -11,7 +11,7 @@ Ships **beside** ask_panel; the `specs` override is the byte-for-byte ask_panel 
 prompt ──> [1] prefilter (regex + explicit-specs check, NO model call)
               │  explicit `specs`?  ──yes──> deterministic bypass (== ask_panel today)
               ▼ no
-          [2] classifier (gemini-3.1-flash-lite, structured JSON)   ──fail──┐
+          [2] classifier (gemini-3.5-flash-lite, structured JSON)   ──fail──┐
               ▼                                                              │
           [3] buildSlots ── capability seats first, never dropped           │
               ▼                                                    prefilter fallback
@@ -74,11 +74,11 @@ You do **not** need a separate OR-priority router; classifier + `auto` + `models
 ## [2] Classifier
 
 - **Transport: through OpenRouter** (`callOpenRouter`), the same gemini-via-OR path the panel uses — one path, not two. Thinking = minimal.
-- **Model (owner decision — latency over antifragility):** pin **`google/gemini-3.1-flash-lite`** via
+- **Model (owner decision — latency over antifragility):** pin **`google/gemini-3.5-flash-lite`** via
   OR — flash-lite is the fastest/cheapest tier, and a classifier on the hot path wants minimum latency.
   (There is **no `gemini-flash-lite-latest`** anywhere — verified on OR and AI Studio — so the only
   `-latest` option would be full `~google/gemini-flash-latest`, which is slower; rejected for latency.)
-  - Fallback `models:["google/gemini-2.5-flash-lite"]` for availability.
+  - Fallback `models:["google/gemini-3.1-flash-lite"]` for availability (2.5 dropped 2026-08).
   - Add a lightweight availability/rename alert on the pinned slug (no cost guard — flash-lite is cheap).
   - **Avoid OR `:free` slugs** on this hot path — rate-limited and latency-unstable.
 - **Output: structured JSON via OR `response_format`.** Pass `response_format:{type:"json_schema",
@@ -370,8 +370,8 @@ ask_oracle is the **5th** tool (ask_panel, get_odds, grok_x_search, get_news_dig
 
 ## Resolved facts (verified 2026-06-24)
 
-- No `gemini-flash-lite-latest` exists (OR or AI Studio) → classifier pins `google/gemini-3.1-flash-lite`
-  via OR for latency, fallback `gemini-2.5-flash-lite`. (§2)
+- No `gemini-flash-lite-latest` exists (OR or AI Studio) → classifier pins `google/gemini-3.5-flash-lite`
+  via OR for latency, fallback `gemini-3.1-flash-lite` (2.5 dropped). (§2)
 - **All Grok stays direct** (x_search + reasoning) → the grok-effort-via-OR question is **moot**, dropped. (§0)
 - xAI BYOK key already added to OR — kept only so `openrouter/auto` can surface Grok. (§0)
 - OR is **not SLA-grade** (~3 acknowledged outages/8mo, 35-50min each, no uptime guarantee) → keeping
@@ -422,7 +422,7 @@ well-calibrated; the FINE policy below is not:**
    url-rotation consumer checklist (journaling routine, settings curls). Until then Grok/journaling are
    untouched and safe.
 3. Push grok-mcp (manual backup — not auto-pushed).
-4. (Deferred follow-up) OR-availability monitor for `google/gemini-3.1-flash-lite` — nice-to-have; the
+4. (Deferred follow-up) OR-availability monitor for `google/gemini-3.5-flash-lite` — nice-to-have; the
    classifier is already fail-loud at runtime, so this is proactive-only, a SEPARATE monitor from the
    AI-Studio cost-jump `gemini-model-check`.
 
