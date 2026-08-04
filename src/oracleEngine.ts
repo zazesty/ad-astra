@@ -898,22 +898,20 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         "routes a panel for you. DEFAULT returns RAW labeled seats for YOU to synthesize — it gathers, it " +
         "does NOT judge (same output contract as ask_panel); pass synthesize:true for ONE merged verdict. " +
         "SEATS come in two kinds: CAPABILITY seats — live-X (Grok x_search) and " +
-        "web grounding (Gemini Google Search) — and REASONING seats — a model pool that, on a multi-seat " +
-        "panel, is filled DIVERSITY-FIRST (cross-family by construction, e.g. Grok + Gemini) with " +
-        "`openrouter/auto` used only as overflow once each family is seated. The classifier decides how " +
-        "many seats, which capabilities, which lens, and " +
-        "how hard to think. Returns a legible `route` object (which models ran, lens/effort, capabilities " +
-        "fired, who decided + why), `slots_status`, a `degraded` flag, and either `raw` labeled answers " +
-        "(DEFAULT — YOU synthesize) or a single `answer` when synthesize=true (for headless callers). " +
-        "ask_oracle keeps NO model hand-pick knobs by design — describe the question and it picks the panel " +
-        "for you. To name the exact model per seat, or set per-member grounding/temperature/lens, use " +
-        "ask_panel (those are its job, not overrides here). The remaining overrides are all auto-routing " +
-        "assistance (capabilities, effort, lens, panel size, caller-family exclusion) and are optional, " +
-        "superseding the classifier. " +
-        "FUSION (`engine:\"fusion\"`) is a deliberate ESCALATION — use ONLY when the question is genuinely " +
-        "contested (real tradeoffs, expert disagreement, high cost of being wrong). Do NOT use Fusion for " +
-        "tactical, factual, or single-path prompts the default panel handles fine; it runs OR's full internal " +
-        "multi-model panel+judge (~40–120s, multi-seat cost). Default path = classifier + diversity pool.",
+        "web grounding (Gemini Google Search) — and REASONING seats. Multi-seat REASONING default is " +
+        "Grok-primary: gemini → gpt → openrouter/auto (no grok-direct opinion seat, so a Grok caller " +
+        "does not consult itself). Pass exclude_family:\"none\" only when you want full cross-family " +
+        "including a grok-direct contrarian. The classifier decides how many seats, which capabilities, " +
+        "which lens, and how hard to think. Returns a legible `route` object (which models ran, " +
+        "lens/effort, capabilities fired, who decided + why), `slots_status`, a `degraded` flag, and " +
+        "either `raw` labeled answers (DEFAULT — YOU synthesize) or a single `answer` when " +
+        "synthesize=true (for headless callers). ask_oracle keeps NO model hand-pick knobs by design — " +
+        "describe the question and it picks the panel for you. To name the exact model per seat, or set " +
+        "per-member grounding/temperature/lens, use ask_panel (those are its job, not overrides here). " +
+        "Optional overrides (capabilities, effort, lens, panel size, exclude_family) supersede the " +
+        "classifier. FUSION (`engine:\"fusion\"`) is deliberate ESCALATION only for genuinely contested " +
+        "questions (real tradeoffs, expert disagreement, high cost of being wrong) — not tactical/factual " +
+        "prompts; OR internal multi-model panel+judge (~40–120s, multi-seat cost).",
       inputSchema: {
         prompt: z
           .string()

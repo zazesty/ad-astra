@@ -82,9 +82,8 @@ function buildServer() {
     xaiBaseUrl: XAI_BASE_URL,
   });
 
-  // Shared KB over the existing Claude Code auto-memory directory.
-  // Four tools: search / retrieve / upsert / list. File-backed, live reads,
-  // writes are the single authority for cross-harness facts.
+  // Shared file-backed memory KB (/root/memory). Four tools: search / retrieve /
+  // upsert / list. MCP is the single read/write authority.
   registerMemoryTools(server);
   registerGetMetrics(server);
   registerResearchFanout(server, {

@@ -19,27 +19,24 @@ export type FactStatus = "active" | "superseded" | "archived";
 /** Verbatim preamble for index.md — survives regeneration. */
 const INDEX_PREAMBLE = `# Memory KB — Index & TOC
 
-Shared, MCP-queryable KB for zaz-astra/grok-mcp/Grok Build.
-Location: /root/memory/ (Claude auto-memory via autoMemoryDirectory setting).
+Shared, MCP-queryable knowledge base for zaz-astra / grok-mcp.
+Location: /root/memory/ (file-backed facts; MCP is the read/write authority).
 Tools: memory_search, memory_retrieve, memory_upsert, memory_list.
 Resource: memory://index (no tool call).
 
-**Auto-Update Protocol (for Grok Build + Claude alike):**
-Whoever's turn it is (the active agent) does the extraction at end of substantive turns.
+**Auto-Update Protocol (any active agent harness):**
+Whoever's turn it is does the extraction at end of substantive turns.
 1. Only after substantive work (new decisions, gotchas, patterns, configs, architecture — not no-ops).
 2. Extract *only the delta* (concise, few-K tokens). Never re-read whole store.
 3. High-confidence only (model judgment: novel + useful + not obvious).
 4. \`memory_search\` first (query + tags) to dedup/check conflicts.
 5. If warranted: \`memory_upsert\` (full tags/related, clean body, no frontmatter).
 6. On conflict: flag in content or via simple status in response; never silent overwrite.
-7. Mirror journaling: usage/substance gated. Cheap. MCP tools are the authority.
-8. Auto-harvest: during upsert, [[slugs]] in body are auto-added to related[].
-
-Use this protocol symmetrically. Both agents have identical access via the MCP.
+7. Substance-gated. Cheap. MCP tools are the authority.
+8. During upsert, [[slugs]] in body are auto-added to related[].
 
 **NOTE:** \`MEMORY.md\` and \`index.md\` are auto-regenerated on every \`memory_upsert\`
-from each fact's frontmatter ([[memory-system-structure]]). The reliable cron harvester
-trigger is separate — see [[grok-build-auto-update-gates]].
+from each fact's frontmatter ([[memory-system-structure]]).
 
 `;
 
@@ -611,7 +608,7 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Search",
       description:
-        "Search the shared cross-harness memory KB (facts, decisions, gotchas, setup; the single source of truth also used by Claude Code auto-memory). Hybrid search: tag filter (hard AND pre-filter) → semantic cosine rank → keyword boost/fallback. Defaults to active facts only. Returns headers + excerpts. Discovery tool — follow up with memory_retrieve for bodies. For a plain unfiltered enumeration with no keyword, prefer memory_list (cheaper, headers-only). Tags without a query → tag-filtered facts newest-first (like a filtered list, but with this tool's field weighting).",
+        "Search the shared memory KB (facts, decisions, gotchas, setup — single source of truth via MCP). Hybrid search: tag filter (hard AND pre-filter) → semantic cosine rank → keyword boost/fallback. Defaults to active facts only. Returns headers + excerpts. Discovery tool — follow up with memory_retrieve for bodies. For a plain unfiltered enumeration with no keyword, prefer memory_list (cheaper, headers-only). Tags without a query → tag-filtered facts newest-first (like a filtered list, but with this tool's field weighting).",
       inputSchema: {
         query: z
           .string()
@@ -653,7 +650,7 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Retrieve",
       description:
-        "Return one complete fact by id (the stable slug used as filename and key). [[slug]] refers to this id. Includes normalized frontmatter fields + full markdown body. Call after search or when you have a [[id]]. Part of the single source of truth shared with Claude Code auto-memory.",
+        "Return one complete fact by id (the stable slug used as filename and key). [[slug]] refers to this id. Includes normalized frontmatter fields + full markdown body. Call after search or when you have a [[id]]. Part of the shared MCP memory KB.",
       inputSchema: {
         id: z
           .string()
@@ -676,7 +673,7 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Upsert",
       description:
-        "Create or update a fact in the shared KB (the single source of truth also used by Claude Code auto-memory + Grok Build). On update: omitted fields are preserved; any field you pass completely replaces the previous value (tags/related arrays are replaced, not unioned — send the full desired set). Bumps updated + version. Provide clean markdown body only (no --- frontmatter block). If editing a fact retrieved via memory_retrieve, strip the frontmatter it returned before sending. This is the only write path for auto-update and cross-harness facts. COLLISION: keyed by EXACT id (input.id, else input.name; kebab-case by convention — NOT auto-slugified). An existing id updates/merges in place; a near-duplicate id creates a SEPARATE fact — there is no fuzzy dedup, so memory_search first to avoid clobbering or duplicating a fact.",
+        "Create or update a fact in the shared MCP memory KB. On update: omitted fields are preserved; any field you pass completely replaces the previous value (tags/related arrays are replaced, not unioned — send the full desired set). Bumps updated + version. Provide clean markdown body only (no --- frontmatter block). If editing a fact retrieved via memory_retrieve, strip the frontmatter it returned before sending. This is the only write path for durable facts. COLLISION: keyed by EXACT id (input.id, else input.name; kebab-case by convention — NOT auto-slugified). An existing id updates/merges in place; a near-duplicate id creates a SEPARATE fact — there is no fuzzy dedup, so memory_search first to avoid clobbering or duplicating a fact.",
       inputSchema: {
         id: z.string().optional().describe("Optional explicit id/slug. Defaults to sanitized `name`."),
         name: z
@@ -747,7 +744,7 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory List",
       description:
-        "List fact headers (id, name, desc, tags, status, updated). Optional tag filter. Defaults to active facts only. Cheap overview or TOC builder. Use when you don't need bodies yet. No keyword/body matching — use memory_search for that. Best for full enumeration or a TOC. Part of the single source of truth shared with Claude Code auto-memory.",
+        "List fact headers (id, name, desc, tags, status, updated). Optional tag filter. Defaults to active facts only. Cheap overview or TOC builder. Use when you don't need bodies yet. No keyword/body matching — use memory_search for that. Best for full enumeration or a TOC. Part of the shared MCP memory KB.",
       inputSchema: {
         tags: z.array(z.string()).optional().describe("Filter to facts having ALL listed tags. (tags only — for topic/keyword scoping use memory_search.)"),
         limit: z.number().int().min(1).max(200).optional().describe("Max facts (default 100)."),

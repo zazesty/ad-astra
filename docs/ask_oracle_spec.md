@@ -235,7 +235,7 @@ function dispatch(s: Seat) {
 ## [6] assemble + response shape (canonical — resolves the doc conflict)
 
 The handoff said `{answer, route}`; the dispatch default returned `{raw, route, slots_status, degraded}`.
-**Canonical: one type, two modes.** Default = **caller synthesizes** (the in-chat caller is Claude,
+**Canonical: one type, two modes.** Default = **caller synthesizes** (the in-chat caller synthesizes;
 a better synthesizer than a cheap pass). `synthesize:true` for headless callers (cron/other tools).
 
 ```ts
@@ -258,7 +258,7 @@ runs on `~google/gemini-pro-latest` (a strong, predictable reasoner), NOT `openr
 is a fixed, well-defined task; `auto` optimizes per-prompt and could route a "merge these answers" call
 to a weak/unexpected model. The judge reads the already-collected labeled seat outputs and writes one
 coherent answer (agreements stated, genuine disagreements surfaced, citations preserved). Default stays
-`synthesize:false` — the in-chat caller (Claude) is the better synthesizer.
+`synthesize:false` — the in-chat caller is usually the better synthesizer.
 
 ---
 
@@ -341,7 +341,7 @@ free as the dispatch doc implied; with this refactor it's cheap.)
 ask_oracle is the **5th** tool (ask_panel, get_odds, grok_x_search, get_news_digest, **ask_oracle**).
 
 **Does the 5th tool break the journaling routine?** Only the *URL rotation* does, not the tool itself:
-- **Adding ask_oracle on the EXISTING URL:** after server restart, Claude Code callers (journaling
+- **Adding ask_oracle on the EXISTING URL:** after server restart, callers (
   routine, settings.local.json curls) call tools **by name** on the existing endpoint — a longer tool
   *list* doesn't affect them. **Journaling does NOT break.** Just bump smoke-test `EXPECTED_TOOLS` 4→5.
 - **Grok's connector caches the tool list per URL** — Grok won't *see* ask_oracle until given a **new
@@ -349,7 +349,7 @@ ask_oracle is the **5th** tool (ask_panel, get_odds, grok_x_search, get_news_dig
   must be updated by hand (journaling **fails silently** if missed; also settings curls + Grok connector).
 
 **Recommended sequence:**
-1. Ship ask_oracle on the **existing** URL; bump `EXPECTED_TOOLS` 4→5; validate via Claude Code (journaling untouched).
+1. Ship ask_oracle on the **existing** URL; bump `EXPECTED_TOOLS` 4→5; validate via live MCP consumers.
 2. Diff `route.models`/`route.lens` vs hand-written specs on real prompts until the route stops surprising you.
 3. Rotate to a **fresh Grok URL** only when you want Grok to use ask_oracle — running the full
    url-rotation consumer checklist (astra-config README) at that point.

@@ -255,7 +255,7 @@ rewrites those lines anyway — not worth a standalone commit.
   2026-06-26. grok-caller pool = gemini → gpt-5.5 → auto (no grok). URL rotated same
   day → active for Grok callers on reconnect (item 3). Spec §4.
 - **gpt-5.5 promoted to default pool #3.** ✅ DONE + pushed + live 2026-06-26 (commit
-  `0248e92`). Claude-caller panel of 2/3/4 seats = gemini → grok → gpt → auto(overflow);
+  `0248e92`). legacy non-Grok full-cross-family (exclude_family none): gemini → grok → gpt → auto; DEFAULT is Grok-primary gemini → gpt → auto;
   resolves the old "panel_size:4 duplicates gemini" follow-up. Spec §4.
 - **C — specs passthrough / fold ask_panel.** 🔴 DEPRECATED — closed by the
   keep-separate axis. Patch ask_panel directly; per-spec grounding/temperature/lens
