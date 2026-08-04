@@ -166,12 +166,10 @@ const DEFAULT_REASONING_POOL = ["openrouter/auto", GEMINI_PRO_SLUG];
  * so a 2-seat panel comes back cross-family by construction. The tail repeats the
  * named families so large panels keep cycling real models, not stacked `auto`.
  *
- * Fill order (2026-06-26 owner call): gemini → grok → gpt → openrouter/auto, then
- * cycle the three named families. `auto` is the OVERFLOW wildcard — used only
- * once each distinct family (gemini, grok, gpt) already has a seat — so a 3-seat
- * Claude-caller panel seats three genuine cross-family voices, not two + a wildcard
- * that lately lands on Gemini anyway. The head is deduped against capability/forced
- * seats the same way (haveGrok/haveGemini above); haveGpt mirrors it.
+ * Full cross-family fill (opt-in via exclude_family:"none"|"off"): gemini → grok →
+ * gpt → openrouter/auto. Use when the CALLER is not Grok (e.g. claude.ai) and a
+ * grok-direct contrarian opinion seat is wanted. Default path is `defaultCallerPool`
+ * (Grok-primary — no Grok opinion seat).
  */
 function panelFillPool(existing: Seat[]): string[] {
   const haveGrok = existing.some((s) => s.provider === "grok-direct");
@@ -189,22 +187,18 @@ function panelFillPool(existing: Seat[]): string[] {
 }
 
 /**
- * Diversity-first fill order for a GROK-CALLER panel (exclude_family:"grok"). The
- * default `panelFillPool` seats a grok-direct contrarian voice — correct when the
- * caller is Claude, but when the CALLER is Grok that's a second Grok voice
- * consulting itself (goofy), and it's also the slow high-effort seat from fix A
- * (2026-06-26). So we drop it and seat genuine cross-family dissent instead:
+ * DEFAULT reasoning fill (Grok-primary, 2026-08). No grok-direct REASONING seat —
+ * Grok is the usual caller and must not consult itself. Cross-family dissent only:
  *
- *   1 seat → gemini · 2 → gemini, gpt · 3 → gemini, gpt, auto · 4+ → cycled, no grok
+ *   1 seat (with exclude_family:"grok" legacy) → gemini
+ *   multi-seat default → gemini · gpt · auto · cycle (never grok opinion)
  *
- * `openrouter/auto` is demoted to the 3rd/overflow voice (family-agnostic; the
- * 2026-06-24 probe found it never surfaces Grok, so it's safe here). Capability
- * seats are EXEMPT and stay seated by `buildSlots` before this runs — a grok-x seat
- * is data retrieval (live X search), NOT Grok's opinion, so it is NOT "same-family
- * reasoning" and is correctly left in place. Families already seated by capability
- * seats are deduped from the head (mirrors panelFillPool's philosophy).
+ * `openrouter/auto` is overflow (family-agnostic; 2026-06-24 probe: rarely/never
+ * surfaces Grok). Capability seats stay in `buildSlots` before this runs — grok-x
+ * is live-X data, not Grok's opinion. Families already seated are deduped from head.
+ * Alias: historical name grokCallerPool; exclude_family:"grok" is a no-op synonym.
  */
-function grokCallerPool(existing: Seat[]): string[] {
+function defaultCallerPool(existing: Seat[]): string[] {
   const haveGemini = existing.some((s) => s.provider === "openrouter" && /gemini/i.test(s.model_slug));
   const haveGpt = existing.some((s) => /gpt/i.test(s.model_slug));
   const head: string[] = [];
@@ -213,6 +207,8 @@ function grokCallerPool(existing: Seat[]): string[] {
   // Tail cycles real models then auto as overflow — NEVER grok.
   return [...head, "openrouter/auto", GEMINI_PRO_SLUG, GPT_SLUG];
 }
+/** @deprecated alias — same as defaultCallerPool (Grok-primary default). */
+const grokCallerPool = defaultCallerPool;
 
 // A grok slug in the reasoning pool (the literal "grok" diversity seat) → a
 // grok-DIRECT reasoning seat (grounding off), per §0. `openrouter/auto` may itself
@@ -273,14 +269,19 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   const want = ov.n ?? c.suggested_panel_n ?? 1;
   const target = Math.max(want, seats.length, 1);
   // Reasoning-pool fill — purely AUTO, no hand-pick (naming exact models is
-  // ask_panel's job, by design). A Grok CALLER (exclude_family:"grok") gets the
-  // no-grok cross-family order on ANY size (even n=1 wants gemini, not a wildcard
-  // that could lean wrong); a non-Grok caller's panel (target>=2) gets the
-  // diversity-first order (grok contrarian + gemini, auto as overflow); a single
-  // seat keeps the plain wildcard default.
-  const pool =
-    ov.exclude_family === "grok" ? grokCallerPool(seats)
-      : target >= 2 ? panelFillPool(seats) : DEFAULT_REASONING_POOL;
+  // ask_panel's job). Grok-primary DEFAULT (2026-08): multi-seat → gemini/gpt/auto
+  // with no grok-direct opinion seat. exclude_family:"grok" = legacy synonym for
+  // default (also forces gemini at n=1). exclude_family:"none"|"off" restores full
+  // cross-family including grok-direct (for non-Grok callers e.g. claude.ai).
+  // n=1 without that flag keeps cheap openrouter/auto.
+  const fullCrossFamily = ov.exclude_family === "none" || ov.exclude_family === "off";
+  const pool = fullCrossFamily
+    ? target >= 2
+      ? panelFillPool(seats)
+      : DEFAULT_REASONING_POOL
+    : target >= 2 || ov.exclude_family === "grok"
+      ? defaultCallerPool(seats)
+      : DEFAULT_REASONING_POOL;
   let i = 0;
   while (seats.length < target) {
     seats.push(reasoningSeat(pool[i++ % pool.length], seats.length, lens, effort));
@@ -720,7 +721,7 @@ export async function assemble(
   const resp: OracleResponse = { route, slots_status, degraded };
 
   // Kaizen #4: when OR/gpt/gemini seats die (often 15s AbortSignal hang) but a
-  // Grok-direct seat recovered, say so — callers (Claude) stop reading "broken".
+  // Grok-direct seat recovered, say so — callers stop reading "broken".
   if (degraded && oks.length > 0) {
     const failed = results.filter((r) => r.status !== "ok");
     const orishFailed = failed.some((r) => {
@@ -962,7 +963,7 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         exclude_family: z
           .string()
           .optional()
-          .describe("Drop same-FAMILY reasoning seats when the CALLER is that family, so a model doesn't consult itself. Pass \"grok\" when Grok is the caller: the contrarian grok-direct reasoning seat is replaced by genuine cross-family dissent — gemini → gpt (Terra) → openrouter/auto (for 1/2/3+ seats). Capability seats (live-X, grounding) are EXEMPT — a grok-x seat is data retrieval, not Grok's opinion, so it stays. Only \"grok\" is meaningful today. Ignored when engine:\"fusion\"."),
+          .describe("Reasoning-pool family policy. DEFAULT (omit or \"grok\") is Grok-primary: no grok-direct REASONING seat — multi-seat fill is gemini → gpt (Terra) → openrouter/auto. Pass \"none\" or \"off\" only when the caller is NOT Grok and you want a grok-direct contrarian opinion seat (full cross-family: gemini → grok → gpt → auto). Capability seats (live-X, grounding) are EXEMPT — grok-x is data retrieval, not Grok's opinion. Ignored when engine:\"fusion\"."),
         engine: z
           .enum(["fusion"])
           .optional()

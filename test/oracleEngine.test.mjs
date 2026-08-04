@@ -65,37 +65,44 @@ console.log("\nUnit: buildSlots — base / capabilities");
 
 console.log("\nUnit: buildSlots — panel sizing & overrides");
 {
+  // Grok-primary default (2026-08): multi-seat = gemini → gpt → auto, NO grok opinion seat
   const s = buildSlots(C({ suggested_panel_n: 3 }), {});
   ok(s.length === 3, "panel_n=3 → 3 seats");
-  ok(s.some((x) => x.provider === "grok-direct"), "default panel guarantees >=1 grok-direct seat (anti-monoculture)");
-  ok(s.some((x) => x.provider === "openrouter" && /gemini/i.test(x.model_slug)), "default panel includes a gemini seat (cross-family)");
+  ok(!s.some((x) => x.provider === "grok-direct" && !x.grok_grounding), "default panel has NO grok-direct reasoning seat (Grok-primary)");
+  ok(s.some((x) => x.provider === "openrouter" && /gemini/i.test(x.model_slug)), "default panel includes a gemini seat");
+  ok(s.some((x) => /gpt/i.test(x.model_slug)), "default panel includes a gpt seat");
 }
 {
-  // auto reappears only as OVERFLOW once ALL three families (gemini, grok, gpt) are seated
+  // overflow auto once gemini+gpt seated (no grok family in default pool)
   const s = buildSlots(C({ suggested_panel_n: 4 }), {});
   ok(s.length === 4, "panel_n=4 → 4 seats");
-  ok(s[3].model_slug === "openrouter/auto", "auto returns as the 4th overflow seat once gemini+grok+gpt are seated");
-  const families = new Set(s.slice(0, 3).map((x) => (x.provider === "grok-direct" ? "grok" : /gemini/i.test(x.model_slug) ? "gemini" : "gpt")));
-  ok(families.size === 3, "first 3 seats span three distinct families before the wildcard");
+  ok(s[2].model_slug === "openrouter/auto", "auto is 3rd once gemini+gpt are seated");
+  ok(/gemini/i.test(s[0].model_slug) && /gpt/i.test(s[1].model_slug), "default 4-seat head: gemini then gpt");
+  ok(!s.some((x) => x.provider === "grok-direct" && !x.grok_grounding), "default 4-seat: still no grok-direct reasoning");
 }
 
 {
-  // the exact failing case: a default 2-seat panel must be cross-family, no auto
+  // default 2-seat: gemini + gpt (not gemini + grok)
   const s = buildSlots(C({ suggested_panel_n: 2 }), {});
   ok(s.length === 2, "panel_n=2 → 2 seats");
-  const families = new Set(s.map((x) => (x.provider === "grok-direct" ? "grok" : /gemini/i.test(x.model_slug) ? "gemini" : x.model_slug)));
-  ok(families.size === 2, "default 2-seat panel spans two families (gemini + grok), not a monoculture");
+  ok(/gemini/i.test(s[0].model_slug) && /gpt/i.test(s[1].model_slug), "default 2-seat: gemini + gpt");
   ok(!s.some((x) => x.model_slug === "openrouter/auto"), "auto NOT used at n=2 — diversity slots fill first");
+  ok(!s.some((x) => x.provider === "grok-direct"), "default 2-seat: no grok-direct");
 }
 {
-  // 3-seat Claude-caller panel: gemini → grok → gpt (three genuine cross-family
-  // voices). auto is demoted to the 4th/overflow slot (was 3rd pre-2026-06-26).
+  // 3-seat Grok-primary: gemini → gpt → auto
   const s = buildSlots(C({ suggested_panel_n: 3 }), {});
   ok(s.length === 3, "panel_n=3 → 3 seats");
-  ok(/gemini/i.test(s[0].model_slug), "default 3-seat: gemini leads (head slot 0)");
-  ok(s[1].provider === "grok-direct", "default 3-seat: grok contrarian second (head slot 1)");
-  ok(/gpt/i.test(s[2].model_slug), "default 3-seat: gpt is the 3rd cross-family voice (head slot 2, NEW 2026-06-26)");
-  ok(!s.some((x) => x.model_slug === "openrouter/auto"), "auto NOT used at n=3 — three families fill before the wildcard");
+  ok(/gemini/i.test(s[0].model_slug), "default 3-seat: gemini leads");
+  ok(/gpt/i.test(s[1].model_slug), "default 3-seat: gpt second");
+  ok(s[2].model_slug === "openrouter/auto", "default 3-seat: auto is overflow 3rd");
+}
+{
+  // opt-in full cross-family for non-Grok callers (exclude_family none/off)
+  const s = buildSlots(C({ suggested_panel_n: 3 }), { exclude_family: "none" });
+  ok(/gemini/i.test(s[0].model_slug), "none: gemini leads");
+  ok(s[1].provider === "grok-direct", "none: grok contrarian second");
+  ok(/gpt/i.test(s[2].model_slug), "none: gpt third");
 }
 {
   // a grok capability seat already covers the grok family → filler adds gemini, not a 2nd grok
@@ -104,8 +111,7 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(s.some((x) => x.provider === "openrouter" && /gemini/i.test(x.model_slug)), "missing gemini family is the one seeded next (no redundant 2nd grok)");
 }
 {
-  // GROK CALLER (exclude_family:"grok"): the contrarian grok-direct seat is DROPPED
-  // (Grok can't be its own dissenting voice) and replaced by gemini → gpt → auto.
+  // exclude_family:"grok" is legacy synonym for default Grok-primary pool
   const s1 = buildSlots(C({ suggested_panel_n: 1 }), { exclude_family: "grok" });
   ok(s1.length === 1 && /gemini/i.test(s1[0].model_slug), "grok-caller n=1 → single gemini seat (not auto, not grok)");
 
@@ -120,7 +126,7 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(!s3.some((x) => x.provider === "grok-direct" && !x.grok_grounding), "no grok-direct REASONING seat anywhere on a grok-caller panel");
 }
 {
-  // GROK CALLER keeps capability seats — grok-x is data retrieval, NOT Grok's opinion
+  // DEFAULT keeps capability seats — grok-x is data retrieval, NOT Grok's opinion
   const s = buildSlots(C({ needs_x: true, suggested_panel_n: 3 }), { exclude_family: "grok" });
   ok(s[0].id === "grok-x" && s[0].provider === "grok-direct", "grok-caller STILL seats the grok-x CAPABILITY seat (data, not opinion)");
   ok(!s.slice(1).some((x) => x.provider === "grok-direct"), "but no grok-direct REASONING seat among the rest");
