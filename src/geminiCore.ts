@@ -223,7 +223,7 @@ export interface CallOpenRouterOpts {
 
 /**
  * Generalized OpenRouter /chat/completions caller — the single OR transport for
- * EVERY OR seat (gemini grounded/reasoning, openrouter/auto, x-ai/grok-* on the
+ * EVERY OR seat (gemini grounded/reasoning, openrouter/auto-beta, x-ai/grok-* on the
  * auto seat, and the classifier). `apiKey` is OPENROUTER_API_KEY (BYOK: google/*
  * bills my AI Studio credits, x-ai/* bills my xAI credits via the dashboard
  * provider keys). Raw fetch, no SDK. Returns {text, citations}, THROWS on failure
@@ -242,7 +242,7 @@ export interface CallOpenRouterOpts {
  *     skip the param rather than send a no-op. (NB: the Google-DIRECT SDK path
  *     above is stricter — `thinkingConfig` on a non-pro model 400s there; that's a
  *     different API, don't conflate them.) Attached for any non-gemini slug (grok +
- *     openrouter/auto both honor it — and x-ai/grok-* DEFAULTS to low via OR, so
+ *     openrouter/auto-beta both honor it — and x-ai/grok-* DEFAULTS to low via OR, so
  *     passing it explicitly is what keeps a grok seat off its silent low floor).
  */
 export async function callOpenRouter(
@@ -257,7 +257,7 @@ export async function callOpenRouter(
   }
 
   // A bare gemini slug (e.g. "gemini-2.5-flash") needs the OpenRouter "google/"
-  // namespace; an already-namespaced slug ("x-ai/grok-4.3", "openrouter/auto",
+  // namespace; an already-namespaced slug ("x-ai/grok-4.3", "openrouter/auto-beta",
   // "~google/…") is passed through untouched.
   const model = slug.includes("/") ? slug : `google/${slug}`;
   const isGemini = /gemini/i.test(model);

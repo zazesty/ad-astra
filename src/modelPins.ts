@@ -8,6 +8,14 @@
 export const GPT_OPENROUTER_SLUG = "openai/gpt-5.6-terra";
 
 /**
+ * OpenRouter Auto Router seat (overflow / n=1 default).
+ * `openrouter/auto` (NotDiamond) is **deprecated** — use Auto Beta
+ * (`openrouter/auto-beta`): task-type rankings from live community spend.
+ * Docs: https://openrouter.ai/docs/guides/routing/routers/auto-router
+ */
+export const OPENROUTER_AUTO_SLUG = "openrouter/auto-beta";
+
+/**
  * Gemini flash-lite generation (classifier + research_fanout *decompose* only —
  * evidence limbs are pro/grounded, not flash-lite).
  *

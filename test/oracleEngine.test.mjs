@@ -76,7 +76,7 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   // overflow auto once gemini+gpt seated (no grok family in default pool)
   const s = buildSlots(C({ suggested_panel_n: 4 }), {});
   ok(s.length === 4, "panel_n=4 → 4 seats");
-  ok(s[2].model_slug === "openrouter/auto", "auto is 3rd once gemini+gpt are seated");
+  ok(s[2].model_slug === "openrouter/auto-beta", "auto is 3rd once gemini+gpt are seated");
   ok(/gemini/i.test(s[0].model_slug) && /gpt/i.test(s[1].model_slug), "default 4-seat head: gemini then gpt");
   ok(!s.some((x) => x.provider === "grok-direct" && !x.grok_grounding), "default 4-seat: still no grok-direct reasoning");
 }
@@ -86,7 +86,7 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   const s = buildSlots(C({ suggested_panel_n: 2 }), {});
   ok(s.length === 2, "panel_n=2 → 2 seats");
   ok(/gemini/i.test(s[0].model_slug) && /gpt/i.test(s[1].model_slug), "default 2-seat: gemini + gpt");
-  ok(!s.some((x) => x.model_slug === "openrouter/auto"), "auto NOT used at n=2 — diversity slots fill first");
+  ok(!s.some((x) => x.model_slug === "openrouter/auto-beta"), "auto NOT used at n=2 — diversity slots fill first");
   ok(!s.some((x) => x.provider === "grok-direct"), "default 2-seat: no grok-direct");
 }
 {
@@ -95,7 +95,7 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(s.length === 3, "panel_n=3 → 3 seats");
   ok(/gemini/i.test(s[0].model_slug), "default 3-seat: gemini leads");
   ok(/gpt/i.test(s[1].model_slug), "default 3-seat: gpt second");
-  ok(s[2].model_slug === "openrouter/auto", "default 3-seat: auto is overflow 3rd");
+  ok(s[2].model_slug === "openrouter/auto-beta", "default 3-seat: auto is overflow 3rd");
 }
 {
   // opt-in full cross-family for non-Grok callers (exclude_family none/off)
@@ -122,7 +122,7 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
 
   const s3 = buildSlots(C({ suggested_panel_n: 3 }), { exclude_family: "grok" });
   ok(s3.length === 3, "grok-caller n=3 → 3 seats");
-  ok(s3[2].model_slug === "openrouter/auto", "grok-caller n=3 → auto is the 3rd/overflow voice only");
+  ok(s3[2].model_slug === "openrouter/auto-beta", "grok-caller n=3 → auto is the 3rd/overflow voice only");
   ok(!s3.some((x) => x.provider === "grok-direct" && !x.grok_grounding), "no grok-direct REASONING seat anywhere on a grok-caller panel");
 }
 {

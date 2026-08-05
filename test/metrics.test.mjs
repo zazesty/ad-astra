@@ -78,7 +78,7 @@ try {
     route_mode: "single",
     seat_id: "auto",
     family: "auto",
-    model_slug: "openrouter/auto",
+    model_slug: "openrouter/auto-beta",
     transport: "or",
     grounded_requested: false,
     grounding_fired: false,
