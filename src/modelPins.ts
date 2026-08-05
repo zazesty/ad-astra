@@ -18,10 +18,12 @@ export const OPENROUTER_AUTO_SLUG = "openrouter/auto-beta";
 /**
  * ask_panel Claude seats via OpenRouter (Anthropic).
  * Enum names are tier (`opus` / `sonnet`), not a single `claude`, so both can
- * sit in one panel. Bump when the OR catalog moves major gens.
+ * sit in one panel. Floating `~…-latest` aliases track the current gen on OR
+ * (verified 2026-08: resolve to opus-5 / sonnet-5). Versioned pins if an alias
+ * ever 404s: anthropic/claude-opus-5 · anthropic/claude-sonnet-5.
  */
-export const CLAUDE_OPUS_OPENROUTER_SLUG = "anthropic/claude-opus-5";
-export const CLAUDE_SONNET_OPENROUTER_SLUG = "anthropic/claude-sonnet-5";
+export const CLAUDE_OPUS_OPENROUTER_SLUG = "~anthropic/claude-opus-latest";
+export const CLAUDE_SONNET_OPENROUTER_SLUG = "~anthropic/claude-sonnet-latest";
 
 /**
  * Gemini flash-lite generation (classifier + research_fanout *decompose* only —

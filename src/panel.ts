@@ -131,7 +131,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         "Backend for this spec. 'grok' (xAI, direct) — contrarian; grounded:true searches X " +
           "(+web if include_web). 'gemini' (Google) — strong reasoning + best live web grounding. " +
           "'openai' (OpenRouter only, pinned gpt-5.6-terra) — third-family voice. " +
-          "'opus' / 'sonnet' (OpenRouter Anthropic, pinned claude-opus-5 / claude-sonnet-5) — Claude seats. " +
+          "'opus' / 'sonnet' (OpenRouter Anthropic, ~claude-opus-latest / ~claude-sonnet-latest) — Claude seats. " +
           "openai/opus/sonnet: no native web/X grounding (grounded:true errors).",
       ),
     prompt: z
@@ -173,7 +173,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .describe(
         "Advanced: override the exact model id (grok-*, gemini-*, OpenRouter openai/* or anthropic/* slug). " +
           "Omit unless you know the exact slug — server defaults are almost always right " +
-          "(openai→Terra, opus→claude-opus-5, sonnet→claude-sonnet-5).",
+          "(openai→Terra, opus→claude-opus-latest, sonnet→claude-sonnet-latest).",
       ),
   });
 
