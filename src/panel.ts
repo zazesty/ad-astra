@@ -6,7 +6,7 @@
  *
  * A 1-element spec array is the single-query path (this tool replaced the old
  * standalone ask_grok / ask_gemini). Live-X is model:grok + grounded:true
- * (auto contract). OpenAI is OR-only (pinned Terra slug).
+ * (auto contract). OpenAI + Claude (opus/sonnet) are OR-only (pinned slugs).
  *
  * One spec failing must not nuke the others — we use an allSettled-style runner
  * (mapLimit) with a small concurrency cap so large batches don't trip
@@ -34,7 +34,11 @@ import {
   recordSeatMetric,
 } from "./metrics.js";
 import { seatBudgetMs, withTimeout } from "./timeouts.js";
-import { GPT_OPENROUTER_SLUG } from "./modelPins.js";
+import {
+  CLAUDE_OPUS_OPENROUTER_SLUG,
+  CLAUDE_SONNET_OPENROUTER_SLUG,
+  GPT_OPENROUTER_SLUG,
+} from "./modelPins.js";
 
 // Grounded gemini on OR can exceed the global 15s per-attempt abort (PK data hit
 // exactly 15s and failed). Panel-only — ungrounded stays at OR_ATTEMPT_TIMEOUT_MS.
@@ -52,8 +56,29 @@ const PANEL_GROUNDED_OR_ATTEMPT_TIMEOUT_MS = 60_000;
 // direct-failover leg after a 60s OR attempt, so recovery can actually fire.
 const PANEL_GROK_SEAT_CAP_MS = 80_000;
 const PANEL_GEMINI_SEAT_CAP_MS = 100_000;
-// OpenAI via OR is usually faster than grounded gemini; keep headroom for OR stalls.
+// OpenAI / Claude via OR is usually faster than grounded gemini; headroom for OR stalls.
 const PANEL_OPENAI_SEAT_CAP_MS = 80_000;
+const PANEL_CLAUDE_SEAT_CAP_MS = 80_000;
+
+/** OR-only panel families with no native web/X grounding. */
+function isOrOnlyWeightsModel(model: string): boolean {
+  return model === "openai" || model === "opus" || model === "sonnet";
+}
+
+function defaultOrSlug(model: string, modelSlug?: string): string {
+  if (modelSlug) return modelSlug;
+  if (model === "openai") return GPT_OPENROUTER_SLUG;
+  if (model === "opus") return CLAUDE_OPUS_OPENROUTER_SLUG;
+  if (model === "sonnet") return CLAUDE_SONNET_OPENROUTER_SLUG;
+  return model;
+}
+
+function familyForSpec(model: string, slug: string): string {
+  if (model === "grok") return "grok";
+  if (model === "openai") return "openai";
+  if (model === "opus" || model === "sonnet") return "claude";
+  return familyFromSlug(slug);
+}
 // Outer must fit the slowest per-model seat (gemini 100s) plus scheduling margin;
 // seats run concurrently so this is ~max seat, not the sum.
 const PANEL_OUTER_BUDGET_MS = 110_000;
@@ -101,12 +126,13 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
 
   const specSchema = z.object({
     model: z
-      .enum(["grok", "gemini", "openai"])
+      .enum(["grok", "gemini", "openai", "opus", "sonnet"])
       .describe(
         "Backend for this spec. 'grok' (xAI, direct) — contrarian; grounded:true searches X " +
           "(+web if include_web). 'gemini' (Google) — strong reasoning + best live web grounding. " +
-          "'openai' (OpenRouter only, pinned gpt-5.6-terra) — third-family voice; no native web/X " +
-          "grounding (grounded:true errors).",
+          "'openai' (OpenRouter only, pinned gpt-5.6-terra) — third-family voice. " +
+          "'opus' / 'sonnet' (OpenRouter Anthropic, pinned claude-opus-5 / claude-sonnet-5) — Claude seats. " +
+          "openai/opus/sonnet: no native web/X grounding (grounded:true errors).",
       ),
     prompt: z
       .string()
@@ -122,7 +148,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .describe(
         "Back the answer with LIVE retrieval. For ANYTHING factual/current set true. " +
           "Gemini → Google Search; Grok → X (+web if include_web), auto mode (search only if needed). " +
-          "openai → not supported (errors). Default false.",
+          "openai/opus/sonnet → not supported (errors). Default false.",
       ),
     include_web: z
       .boolean()
@@ -136,7 +162,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     reasoning_effort: z
       .enum(["low", "medium", "high"])
       .optional()
-      .describe("How hard the model thinks before answering (low|medium|high). Defaults to high for Gemini/Grok/OpenAI; all three levels are honored."),
+      .describe("How hard the model thinks before answering (low|medium|high). Defaults to high for Gemini/Grok/OpenAI/Claude; all three levels are honored."),
     temperature: z
       .number()
       .optional()
@@ -145,9 +171,9 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .string()
       .optional()
       .describe(
-        "Advanced: override the exact model id (grok-*, gemini-*, or OpenRouter openai/* slug). " +
+        "Advanced: override the exact model id (grok-*, gemini-*, OpenRouter openai/* or anthropic/* slug). " +
           "Omit unless you know the exact slug — server defaults are almost always right " +
-          "(openai defaults to pinned Terra).",
+          "(openai→Terra, opus→claude-opus-5, sonnet→claude-sonnet-5).",
       ),
   });
 
@@ -158,12 +184,12 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       description:
         "HAND-PICK one or more models and get raw, labeled answers back for YOU to synthesize. " +
         "Specs run CONCURRENTLY (wall-clock ≈ slowest seat, not the sum). 1-spec = single call " +
-        "(the way to ask Grok, Gemini, or OpenAI one question). Multi-spec = second opinions / " +
-        "cross-family panel (e.g. grok + gemini + openai, or same model at two temps). " +
-        "Each spec picks model ('grok'|'gemini'|'openai'), optional live grounding (gemini web / " +
-        "grok X; openai cannot ground), lens, and temperature. Results stay in input order with " +
-        "ok flags; one seat failing does NOT fail siblings. This tool GATHERS — it does not judge. " +
-        "Auto-routing counterpart: ask_consortium (classifies and picks seats for you). " +
+        "(the way to ask Grok, Gemini, OpenAI, or Claude one question). Multi-spec = second opinions / " +
+        "cross-family panel (e.g. grok + gemini + openai, or opus + sonnet, or same model at two temps). " +
+        "Each spec picks model ('grok'|'gemini'|'openai'|'opus'|'sonnet'), optional live grounding " +
+        "(gemini web / grok X; openai/opus/sonnet cannot ground), lens, and temperature. Results stay " +
+        "in input order with ok flags; one seat failing does NOT fail siblings. This tool GATHERS — it " +
+        "does not judge. Auto-routing counterpart: ask_consortium (classifies and picks seats for you). " +
         "Live-X sentiment: model:'grok' grounded:true (citations when search fires). " +
         "Strategy/tradeoffs you want auto-routed → ask_consortium; multi-hop evidence → research_fanout.",
       inputSchema: {
@@ -184,15 +210,12 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         const defaultTransport: "or" | "direct" =
           spec.model === "grok"
             ? "direct"
-            : spec.model === "openai"
+            : isOrOnlyWeightsModel(spec.model)
               ? "or"
               : geminiTransport === "openrouter"
                 ? "or"
                 : "direct";
-        const defaultSlug =
-          spec.model === "openai"
-            ? spec.model_slug || GPT_OPENROUTER_SLUG
-            : spec.model_slug || spec.model;
+        const defaultSlug = defaultOrSlug(spec.model, spec.model_slug);
         // Single record path for the whole seat (incl. applyLens failures — B2).
         // degraded is per-seat (ok===false), not run-level (B1).
         let recorded = false;
@@ -212,12 +235,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             tool: "panel",
             route_mode: "panel",
             seat_id: seatId,
-            family:
-              spec.model === "grok"
-                ? "grok"
-                : spec.model === "openai"
-                  ? "openai"
-                  : familyFromSlug(extra.model_slug || defaultSlug),
+            family: familyForSpec(spec.model, extra.model_slug || defaultSlug),
             model_slug: extra.model_slug || defaultSlug,
             transport: extra.transport ?? defaultTransport,
             grounded_requested: !!spec.grounded,
@@ -241,8 +259,8 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         const seatCap =
           spec.model === "grok"
             ? PANEL_GROK_SEAT_CAP_MS
-            : spec.model === "openai"
-              ? PANEL_OPENAI_SEAT_CAP_MS
+            : isOrOnlyWeightsModel(spec.model)
+              ? (spec.model === "openai" ? PANEL_OPENAI_SEAT_CAP_MS : PANEL_CLAUDE_SEAT_CAP_MS)
               : PANEL_GEMINI_SEAT_CAP_MS;
         const budget = seatBudgetMs(panelT0, PANEL_OUTER_BUDGET_MS, seatCap);
         if (budget < 500) {
@@ -291,10 +309,11 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             }
           }
 
-          if (spec.model === "openai") {
+          // openai / opus / sonnet — OpenRouter weights-only (no native web/X plugin).
+          if (isOrOnlyWeightsModel(spec.model)) {
             if (spec.grounded) {
               const msg =
-                "openai seat has no native web/X grounding — use model:'gemini' grounded:true " +
+                `${spec.model} seat has no native web/X grounding — use model:'gemini' grounded:true ` +
                 "(web) or model:'grok' grounded:true (X), or drop grounded for weights-only.";
               record(false, { error: msg, transport: "or", model_slug: defaultSlug });
               throw new Error(msg);

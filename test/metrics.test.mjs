@@ -32,6 +32,8 @@ check("hashQuestion stable", hashQuestion("hello").length === 16);
 check("familyFromSlug grok", familyFromSlug("grok", "grok-direct") === "grok");
 check("familyFromSlug gemini", familyFromSlug("~google/gemini-pro-latest") === "gemini");
 check("familyFromSlug fusion", familyFromSlug("openrouter/fusion") === "fusion");
+check("familyFromSlug claude opus", familyFromSlug("anthropic/claude-opus-5") === "claude");
+check("familyFromSlug claude sonnet", familyFromSlug("anthropic/claude-sonnet-5") === "claude");
 check("classifyError timeout", classifyError("timeout", "seat timed out") === "timeout");
 // B3: bare OR "aborted" WITHOUT timeout language is transient, NOT seat-timeout.
 check(

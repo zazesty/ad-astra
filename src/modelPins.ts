@@ -16,6 +16,14 @@ export const GPT_OPENROUTER_SLUG = "openai/gpt-5.6-terra";
 export const OPENROUTER_AUTO_SLUG = "openrouter/auto-beta";
 
 /**
+ * ask_panel Claude seats via OpenRouter (Anthropic).
+ * Enum names are tier (`opus` / `sonnet`), not a single `claude`, so both can
+ * sit in one panel. Bump when the OR catalog moves major gens.
+ */
+export const CLAUDE_OPUS_OPENROUTER_SLUG = "anthropic/claude-opus-5";
+export const CLAUDE_SONNET_OPENROUTER_SLUG = "anthropic/claude-sonnet-5";
+
+/**
  * Gemini flash-lite generation (classifier + research_fanout *decompose* only —
  * evidence limbs are pro/grounded, not flash-lite).
  *

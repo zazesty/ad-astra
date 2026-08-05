@@ -46,6 +46,7 @@ export function familyFromSlug(modelSlug: string, provider?: string): string {
   if (s === "grok" || provider === "grok-direct" || s.includes("grok")) return "grok";
   if (s.includes("gemini")) return "gemini";
   if (s.includes("gpt") || s.includes("openai")) return "openai";
+  if (s.includes("claude") || s.includes("anthropic") || s === "opus" || s === "sonnet") return "claude";
   if (s.includes("auto")) return "auto";
   return "other";
 }
