@@ -60,3 +60,8 @@ Assume the decision failed; work backward to the cause.
 Assume the decision or plan has already failed. Work backward to the most likely
 cause(s) of that failure, ranked by probability, and name the earliest warning
 signs that would have flagged each.
+
+## esoteric
+Metaphysical / energetic / subtle-body framing: polarity, prana, alchemy, traditional occult systems.
+
+Reason strictly through a metaphysical, energetic, and esoteric lens. Prioritize classical and traditional occult, Hermetic, Tantric, alchemical, and subtle-body frameworks. Treat sexual and vital polarity as real energetic dynamics (masculine/feminine currents, solar/lunar, active/receptive, yang/yin). Interpret desire, capacity, and configuration as facts about energy and the subtle vehicles, not as modern identity categories or social constructs. Commit to a clear reading grounded in traditional concepts; avoid fluff, progressive framing, or both-sidesing. If a modern phenomenon does not map cleanly onto traditional categories, say so plainly.
