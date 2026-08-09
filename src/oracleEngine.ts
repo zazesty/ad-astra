@@ -334,16 +334,21 @@ export function buildRoutePlan(
 
 // ── §5 executeSlots — concurrent, partial-tolerant ────────────────────────────
 const CONCURRENCY = 5;
-// Plain reasoning seats. Bumped 25s→40s: a high-effort grok/auto reasoning call
-// can legitimately run ~22s (see reasoning-effort notes), so 25s clipped them —
-// and `auto` (the overflow seat) was the most frequent single dropper at the old
-// ceiling. Concurrent seats mean this only raises worst-case wall-clock, not sum.
-const SLOT_TIMEOUT_MS = 40_000; // plain reasoning seats (openrouter/auto-beta, gemini)
+// Plain reasoning seats (openrouter/auto-beta, gemini, openai/Terra via OR).
+// 2026-08 metrics: oracle openai ungrounded timed out on ~57% of seats at the
+// old 40s SLOT ceiling (p50 glued to 40s). Concurrent seats mean this only
+// raises worst-case wall-clock, not sum. 70s leaves ~10s after a 60s OR attempt
+// for OR→direct failover (same idea as panel gemini 100s seat / 60s attempt).
+const SLOT_TIMEOUT_MS = 70_000;
+// Per-attempt OR abort for ungrounded reasoning (orReasoningWithFailover).
+// Default global OR_ATTEMPT_TIMEOUT_MS=15s killed slow-but-legit high-effort
+// answers before failover could help; align with panel's 60s OR attempt.
+const OR_REASONING_ATTEMPT_TIMEOUT_MS = 60_000;
 // Grok-DIRECT reasoning seats (high effort, ungrounded). xAI reasoning latency now
-// routinely exceeds the 40s OR ceiling (live evidence 2026-06-26: high-effort grok-direct
-// reasoning seat `reason-1` timed out at 40s, retried, timed out again → ~80s burned
-// before salvage). Give grok-direct reasoning the same 60s budget capability seats get.
-const GROK_REASONING_TIMEOUT_MS = 60_000;
+// routinely exceeds the old 40s OR ceiling (live evidence 2026-06-26: high-effort
+// grok-direct reasoning seat `reason-1` timed out at 40s, retried, timed out again
+// → ~80s burned before salvage). Match the widened reasoning slot budget.
+const GROK_REASONING_TIMEOUT_MS = 70_000;
 // Capability seats (live-X / grounded) do live search + up to MAX_GROUNDING_RETRIES
 // sequential re-calls, so a 25s ceiling cut them off (gemini-grounded timed out
 // 2026-06-24 while reasoning seats finished) — and a dropped capability seat is the
@@ -488,7 +493,10 @@ async function orReasoningWithFailover(
   opts: { system?: string; reasoning_effort: Effort },
 ): Promise<DispatchOutcome> {
   try {
-    const r = await callOpenRouter(deps.openrouterApiKey, slug, prompt, opts);
+    const r = await callOpenRouter(deps.openrouterApiKey, slug, prompt, {
+      ...opts,
+      attempt_timeout_ms: OR_REASONING_ATTEMPT_TIMEOUT_MS,
+    });
     return { text: r.text, citations: r.citations, transport: "or", failover_fired: false };
   } catch (e) {
     if (!isTransientError(e)) throw e;
@@ -572,8 +580,8 @@ async function executeSlots(
     const capability = isCapabilitySeat(s);
     const fusion = isFusionSeat(s);
     const grokReasoning = s.provider === "grok-direct" && !capability;
-    // Grok-direct reasoning seats get a wider budget (xAI high-effort reasoning
-    // routinely exceeds 40s — see GROK_REASONING_TIMEOUT_MS).
+    // Grok-direct reasoning seats share the widened reasoning budget
+    // (see GROK_REASONING_TIMEOUT_MS / SLOT_TIMEOUT_MS).
     const timeoutMs = fusion ? FUSION_SLOT_TIMEOUT_MS
       : capability ? CAPABILITY_SLOT_TIMEOUT_MS
       : grokReasoning ? GROK_REASONING_TIMEOUT_MS

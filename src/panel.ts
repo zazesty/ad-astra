@@ -40,11 +40,15 @@ import {
   GPT_OPENROUTER_SLUG,
 } from "./modelPins.js";
 
-// Grounded gemini on OR can exceed the global 15s per-attempt abort (PK data hit
-// exactly 15s and failed). Panel-only — ungrounded stays at OR_ATTEMPT_TIMEOUT_MS.
-// On OR hang/abort we fail over to direct (same idea as ask_oracle) rather than
-// burning the full 60s attempt with no recovery.
-const PANEL_GROUNDED_OR_ATTEMPT_TIMEOUT_MS = 60_000;
+// Per-attempt OpenRouter abort for ALL panel OR seats (grounded + ungrounded).
+// History: default OR_ATTEMPT_TIMEOUT_MS=15s was a hang detector sized for short
+// classifier/news calls. Live metrics 2026-08: ungrounded panel claude/openai
+// timed out on ~75–88% of seats at exactly 15s; the few successes finished
+// ≤14.3s (right-censored). Direct ungrounded answers routinely take 25–55s.
+// 60s matches the prior grounded-panel bump and still leaves headroom under
+// per-model seat caps (claude/openai 80s, gemini 100s) for OR→direct failover.
+// On OR hang/abort gemini fails over to direct rather than burning the full seat.
+const PANEL_OR_ATTEMPT_TIMEOUT_MS = 60_000;
 // A1: outer wall-clock so one stuck grounded seat cannot hold the whole panel
 // until client timeout discards siblings. Per-seat cap still applies via seatBudgetMs.
 //
@@ -323,6 +327,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
                 system,
                 reasoning_effort: spec.reasoning_effort,
                 temperature: spec.temperature,
+                attempt_timeout_ms: PANEL_OR_ATTEMPT_TIMEOUT_MS,
               });
               record(true, {
                 text: r.text,
@@ -353,8 +358,10 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             grounded: spec.grounded,
             reasoning_effort: spec.reasoning_effort,
             temperature: spec.temperature,
-            ...(spec.grounded && geminiTransport === "openrouter"
-              ? { attempt_timeout_ms: PANEL_GROUNDED_OR_ATTEMPT_TIMEOUT_MS }
+            // Always pass the panel OR attempt budget when OR is the transport
+            // (ungrounded used to inherit global 15s and mass-timeout).
+            ...(geminiTransport === "openrouter"
+              ? { attempt_timeout_ms: PANEL_OR_ATTEMPT_TIMEOUT_MS }
               : {}),
           };
           const callOrOnce = () =>
