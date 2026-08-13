@@ -172,7 +172,7 @@ console.log("\nUnit: buildRoutePlan");
   const r = buildRoutePlan(s, C({ needs_x: true, needs_grounding: true, domains: ["econ"], rationale: "rx" }), "classifier", "google/gemini-3.5-flash-lite");
   ok(r.mode === "panel" && r.panel_n === 2, "mode/panel_n from seat count");
   ok(r.used_x_search === true && r.used_grounding === true, "capability flags surfaced");
-  ok(r.models.includes("grok-4.5"), "grok placeholder resolved to grok-4.5 in models[]");
+  ok(r.models.includes("grok-4.6"), "grok placeholder resolved to grok-4.6 in models[]");
   ok(r.source === "classifier" && r.classifier_model === "google/gemini-3.5-flash-lite", "decided-by recorded");
   ok(r.classifier_error === undefined, "no error on clean path");
   ok(r.domains[0] === "econ" && r.rationale === "rx", "domains/rationale telemetry carried");
