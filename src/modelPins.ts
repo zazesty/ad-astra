@@ -17,8 +17,9 @@ export const OPENROUTER_AUTO_SLUG = "openrouter/auto-beta";
 
 /**
  * ask_panel Claude seats via OpenRouter (Anthropic).
- * Enum names are tier (`opus` / `sonnet`), not a single `claude`, so both can
- * sit in one panel. Floating `~…-latest` aliases track the current gen on OR
+ * Enum still has `opus` (Grok chat cache) but panel remaps model:opus → sonnet
+ * — CLAUDE_OPUS_OPENROUTER_SLUG is not a live panel path. Schema cull later
+ * needs MCP_PATH rotation. Floating `~…-latest` aliases track the current gen
  * (verified 2026-08: resolve to opus-5 / sonnet-5). Versioned pins if an alias
  * ever 404s: anthropic/claude-opus-5 · anthropic/claude-sonnet-5.
  */

@@ -33,12 +33,13 @@ import {
   isAttemptTimeoutError,
   recordSeatMetric,
 } from "./metrics.js";
-import { seatBudgetMs, withTimeout } from "./timeouts.js";
+import { canStartAttempt, capAttemptMs, remainingMs, seatBudgetMs, withTimeout } from "./timeouts.js";
 import {
   CLAUDE_OPUS_OPENROUTER_SLUG,
   CLAUDE_SONNET_OPENROUTER_SLUG,
   GPT_OPENROUTER_SLUG,
 } from "./modelPins.js";
+import { CLI_BUDGET, type BudgetProfile } from "./budgetProfile.js";
 
 // Per-attempt OpenRouter abort for ALL panel OR seats (grounded + ungrounded).
 // History: default OR_ATTEMPT_TIMEOUT_MS=15s was a hang detector sized for short
@@ -48,21 +49,7 @@ import {
 // 60s matches the prior grounded-panel bump and still leaves headroom under
 // per-model seat caps (claude/openai 80s, gemini 100s) for OR→direct failover.
 // On OR hang/abort gemini fails over to direct rather than burning the full seat.
-const PANEL_OR_ATTEMPT_TIMEOUT_MS = 60_000;
-// A1: outer wall-clock so one stuck grounded seat cannot hold the whole panel
-// until client timeout discards siblings. Per-seat cap still applies via seatBudgetMs.
-//
-// Per-model seat caps sized to observed p99 (get_metrics, 14d): grok p99 ~78s,
-// gemini grounded p99 ~96s. The old flat 60s cap pinned grounded-gemini p50 at
-// exactly 60s (half the seats slamming the ceiling) AND made the OR→direct
-// failover unreachable — a 60s OR attempt against a 70s outer left ~10s for the
-// direct leg, so failover_fired stayed 0. Gemini's 100s cap leaves ~40s for the
-// direct-failover leg after a 60s OR attempt, so recovery can actually fire.
-const PANEL_GROK_SEAT_CAP_MS = 80_000;
-const PANEL_GEMINI_SEAT_CAP_MS = 100_000;
-// OpenAI / Claude via OR is usually faster than grounded gemini; headroom for OR stalls.
-const PANEL_OPENAI_SEAT_CAP_MS = 80_000;
-const PANEL_CLAUDE_SEAT_CAP_MS = 80_000;
+// Seat / OR attempt caps live on BudgetProfile (cli = 2026-08 numbers; chat = 50s envelope).
 
 /** OR-only panel families with no native web/X grounding. */
 function isOrOnlyWeightsModel(model: string): boolean {
@@ -83,17 +70,27 @@ function familyForSpec(model: string, slug: string): string {
   if (model === "opus" || model === "sonnet") return "claude";
   return familyFromSlug(slug);
 }
-// Outer must fit the slowest per-model seat (gemini 100s) plus scheduling margin;
-// seats run concurrently so this is ~max seat, not the sum.
-const PANEL_OUTER_BUDGET_MS = 110_000;
-
 type RegisterOpts = {
   xaiApiKey: string | undefined;
   geminiApiKey: string | undefined;
   openrouterApiKey: string | undefined;
   geminiTransport: GeminiTransport;
   xaiBaseUrl?: string;
+  budget?: BudgetProfile;
 };
+
+/** Short-term: Grok chat still sends model:opus; run sonnet. Schema cull later (rotation). */
+export function applyOpusRemap(spec: { model: string; model_slug?: string }): {
+  model: string;
+  model_slug?: string;
+  remapped_from?: "opus";
+} {
+  if (spec.model !== "opus") {
+    return { model: spec.model, model_slug: spec.model_slug };
+  }
+  const keepSlug = spec.model_slug && !/opus/i.test(spec.model_slug) ? spec.model_slug : undefined;
+  return { model: "sonnet", model_slug: keepSlug, remapped_from: "opus" };
+}
 
 // Concurrency cap: at N=2-3 it's a no-op; it only bites if a spec list grows
 // large enough to threaten per-provider rate/concurrency limits.
@@ -127,6 +124,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
   const geminiClient: GeminiClient | null = makeGeminiClient(opts.geminiApiKey);
   const xaiBaseUrl = opts.xaiBaseUrl;
   const geminiTransport = opts.geminiTransport;
+  const budgetProfile = opts.budget ?? CLI_BUDGET;
 
   const specSchema = z.object({
     model: z
@@ -206,20 +204,27 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     },
     async ({ specs }: { specs: z.infer<typeof specSchema>[] }) => {
       const panelT0 = Date.now();
+      const outerMs = budgetProfile.panelOuterMs;
       const settled = await mapLimit(specs, CONCURRENCY, async (spec, idx) => {
         const t0 = Date.now();
         const label = spec.label ?? spec.model;
         const seatId = `panel-${idx}-${label}`;
         const qHash = hashQuestion(spec.prompt);
+        const remapped = applyOpusRemap(spec);
+        const model = remapped.model;
+        const modelSlug = remapped.model_slug;
+        if (remapped.remapped_from) {
+          console.error(`[ask_panel] remapped opus → sonnet label=${label}`);
+        }
         const defaultTransport: "or" | "direct" =
-          spec.model === "grok"
+          model === "grok"
             ? "direct"
-            : isOrOnlyWeightsModel(spec.model)
+            : isOrOnlyWeightsModel(model)
               ? "or"
               : geminiTransport === "openrouter"
                 ? "or"
                 : "direct";
-        const defaultSlug = defaultOrSlug(spec.model, spec.model_slug);
+        const defaultSlug = defaultOrSlug(model, modelSlug);
         // Single record path for the whole seat (incl. applyLens failures — B2).
         // degraded is per-seat (ok===false), not run-level (B1).
         let recorded = false;
@@ -239,12 +244,12 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             tool: "panel",
             route_mode: "panel",
             seat_id: seatId,
-            family: familyForSpec(spec.model, extra.model_slug || defaultSlug),
+            family: familyForSpec(model, extra.model_slug || defaultSlug),
             model_slug: extra.model_slug || defaultSlug,
             transport: extra.transport ?? defaultTransport,
             grounded_requested: !!spec.grounded,
             grounding_fired: ok && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
-            x_search_fired: ok && spec.model === "grok" && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
+            x_search_fired: ok && model === "grok" && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
             reasoning_effort: spec.reasoning_effort ?? "medium",
             latency_ms: Date.now() - t0,
             failover_fired: !!extra.failover_fired,
@@ -261,12 +266,12 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         };
 
         const seatCap =
-          spec.model === "grok"
-            ? PANEL_GROK_SEAT_CAP_MS
-            : isOrOnlyWeightsModel(spec.model)
-              ? (spec.model === "openai" ? PANEL_OPENAI_SEAT_CAP_MS : PANEL_CLAUDE_SEAT_CAP_MS)
-              : PANEL_GEMINI_SEAT_CAP_MS;
-        const budget = seatBudgetMs(panelT0, PANEL_OUTER_BUDGET_MS, seatCap);
+          model === "grok"
+            ? budgetProfile.panelGrokSeatMs
+            : isOrOnlyWeightsModel(model)
+              ? (model === "openai" ? budgetProfile.panelOpenaiSeatMs : budgetProfile.panelClaudeSeatMs)
+              : budgetProfile.panelGeminiSeatMs;
+        const budget = seatBudgetMs(panelT0, outerMs, seatCap);
         if (budget < 500) {
           const msg = `${seatId} timed out after 0ms (panel outer budget exhausted)`;
           record(false, { error: msg, transport: defaultTransport, timed_out: true });
@@ -284,7 +289,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           const { system, error } = applyLens(spec.lens, spec.system);
           if (error) throw new Error(error);
 
-          if (spec.model === "grok") {
+          if (model === "grok") {
             const grounding: Grounding = spec.grounded ? "auto" : "off";
             try {
               const r = await callGrok(
@@ -292,7 +297,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
                 spec.prompt,
                 {
                   system,
-                  model: spec.model_slug,
+                  model: modelSlug,
                   reasoning_effort: spec.reasoning_effort,
                   temperature: spec.temperature,
                   grounding,
@@ -314,10 +319,10 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           }
 
           // openai / opus / sonnet — OpenRouter weights-only (no native web/X plugin).
-          if (isOrOnlyWeightsModel(spec.model)) {
+          if (isOrOnlyWeightsModel(model)) {
             if (spec.grounded) {
               const msg =
-                `${spec.model} seat has no native web/X grounding — use model:'gemini' grounded:true ` +
+                `${model} seat has no native web/X grounding — use model:'gemini' grounded:true ` +
                 "(web) or model:'grok' grounded:true (X), or drop grounded for weights-only.";
               record(false, { error: msg, transport: "or", model_slug: defaultSlug });
               throw new Error(msg);
@@ -327,7 +332,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
                 system,
                 reasoning_effort: spec.reasoning_effort,
                 temperature: spec.temperature,
-                attempt_timeout_ms: PANEL_OR_ATTEMPT_TIMEOUT_MS,
+                attempt_timeout_ms: capAttemptMs(t0, budget, budgetProfile.panelOrAttemptMs),
               });
               record(true, {
                 text: r.text,
@@ -354,14 +359,14 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           // On OR hang/transient: fail over to direct SDK (kaizen #3, mirrors oracle).
           const geminiOpts = {
             system,
-            model: spec.model_slug,
+            model: modelSlug,
             grounded: spec.grounded,
             reasoning_effort: spec.reasoning_effort,
             temperature: spec.temperature,
             // Always pass the panel OR attempt budget when OR is the transport
             // (ungrounded used to inherit global 15s and mass-timeout).
             ...(geminiTransport === "openrouter"
-              ? { attempt_timeout_ms: PANEL_OR_ATTEMPT_TIMEOUT_MS }
+              ? { attempt_timeout_ms: capAttemptMs(t0, budget, budgetProfile.panelOrAttemptMs) }
               : {}),
           };
           const callOrOnce = () =>
@@ -398,6 +403,12 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             let r = await once();
             if (spec.grounded) {
               for (let attempt = 1; attempt <= MAX_GROUNDING_RETRIES && r.citations.length === 0; attempt++) {
+                if (!canStartAttempt(t0, budget)) {
+                  console.error(
+                    `[ask_panel] skip grounding retry, ${remainingMs(t0, budget)}ms left. label=${label} path=${pathLabel}`,
+                  );
+                  break;
+                }
                 console.error(
                   `[ask_panel] gemini grounded miss (0 citations) — retry ${attempt}/${MAX_GROUNDING_RETRIES}. label=${label} path=${pathLabel}`,
                 );
@@ -427,6 +438,12 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
                 // Grounding miss is NOT transient — fail loud, do not failover-mask.
                 const msg = (e as Error)?.message ?? String(e);
                 if (msg.includes("grounding_fired:false") || !isTransientError(e)) throw e;
+                if (!canStartAttempt(t0, budget)) {
+                  console.error(
+                    `[ask_panel] skip OR→direct failover, ${remainingMs(t0, budget)}ms left. label=${label}`,
+                  );
+                  throw e;
+                }
                 console.error(
                   `[ask_panel] OR transient fail on ${label} — failover → direct-gemini: ${msg}`,
                 );
@@ -474,14 +491,18 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
 
       const results = settled.map((r, i) => {
         const label = specs[i].label ?? specs[i].model;
+        const remapped_from = specs[i].model === "opus" ? "opus" : undefined;
         if (r.status === "fulfilled") {
           const out: Record<string, unknown> = { label, ok: true, text: r.value.text };
           if (r.value.citations?.length) out.citations = r.value.citations;
           if (r.value.failover_fired) out.failover_fired = true;
           if (r.value.transport) out.transport = r.value.transport;
+          if (remapped_from) out.remapped_from = remapped_from;
           return out;
         }
-        return { label, ok: false, error: String(r.reason?.message ?? r.reason) };
+        const fail: Record<string, unknown> = { label, ok: false, error: String(r.reason?.message ?? r.reason) };
+        if (remapped_from) fail.remapped_from = remapped_from;
+        return fail;
       });
 
       // Kaizen #4 (panel): surface OR hang recovery when siblings still answered.

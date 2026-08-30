@@ -10,6 +10,11 @@ import { registerMemoryTools, loadMemoryIndexRaw } from "./memory.js";
 import { loadLensesRaw } from "./lenses.js";
 import { registerGetMetrics } from "./metrics.js";
 import { registerResearchFanout } from "./researchFanout.js";
+import {
+  budgetProfileFromUserAgent,
+  shortUserAgent,
+  type BudgetProfile,
+} from "./budgetProfile.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -21,7 +26,7 @@ const GEMINI_TRANSPORT = process.env.GEMINI_TRANSPORT === "openrouter" ? "openro
 const XAI_BASE_URL = "https://api.x.ai/v1";
 const PORT = Number(process.env.PORT ?? 3000);
 
-function buildServer() {
+function buildServer(budget: BudgetProfile) {
   const server = new McpServer({ name: "grok-mcp-remote", version: "1.0.0" });
 
   server.registerTool(
@@ -57,6 +62,7 @@ function buildServer() {
     openrouterApiKey: OPENROUTER_API_KEY,
     geminiTransport: GEMINI_TRANSPORT,
     xaiBaseUrl: XAI_BASE_URL,
+    budget,
   });
 
   // On-demand news digest. Reuses the same Gemini/Grok cores + transport as
@@ -77,6 +83,7 @@ function buildServer() {
     geminiApiKey: GEMINI_API_KEY,
     openrouterApiKey: OPENROUTER_API_KEY,
     xaiBaseUrl: XAI_BASE_URL,
+    budget,
   });
 
   // Shared file-backed memory KB (/root/memory). Four tools: search / retrieve /
@@ -88,6 +95,7 @@ function buildServer() {
     geminiApiKey: GEMINI_API_KEY,
     openrouterApiKey: OPENROUTER_API_KEY,
     geminiTransport: GEMINI_TRANSPORT,
+    budget,
     xaiBaseUrl: XAI_BASE_URL,
   });
 
@@ -134,13 +142,44 @@ const MCP_PATHS = (process.env.MCP_PATH ?? "/mcp")
   .map((p) => p.trim())
   .filter(Boolean);
 
+const SLOW_TOOLS = new Set(["ask_panel", "ask_consortium", "research_fanout", "get_news_digest"]);
+
 // Stateless: a fresh server + transport per request. Simple and fine for a single-tool personal server.
 app.post(MCP_PATHS, async (req, res) => {
-  const server = buildServer();
+  const rawUa = req.get("user-agent");
+  const ua = shortUserAgent(rawUa);
+  const budget = budgetProfileFromUserAgent(rawUa);
+  const method = typeof req.body?.method === "string" ? req.body.method : "?";
+  const tool = typeof req.body?.params?.name === "string" ? req.body.params.name : "-";
+  const t0 = Date.now();
+  let finished = false;
+  if (SLOW_TOOLS.has(tool) || tool === "-") {
+    console.error(`[mcp] start method=${method} tool=${tool} ua=${ua} profile=${budget.name}`);
+  }
+  const server = buildServer(budget);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  res.on("close", () => { transport.close(); server.close(); });
-  await server.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+  res.on("close", () => {
+    if (!finished) {
+      console.error(
+        `[mcp] client-closed-early method=${method} tool=${tool} ua=${ua} profile=${budget.name} ms=${Date.now() - t0}`,
+      );
+    }
+    transport.close();
+    server.close();
+  });
+  try {
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+    finished = true;
+    if (SLOW_TOOLS.has(tool) || tool === "-") {
+      console.error(`[mcp] done method=${method} tool=${tool} ua=${ua} profile=${budget.name} ms=${Date.now() - t0}`);
+    }
+  } catch (e) {
+    console.error(
+      `[mcp] handler-error method=${method} tool=${tool} ua=${ua} profile=${budget.name} ms=${Date.now() - t0}: ${(e as Error).message}`,
+    );
+    throw e;
+  }
 });
 
 // Stateless mode does not use long-lived GET/DELETE sessions.

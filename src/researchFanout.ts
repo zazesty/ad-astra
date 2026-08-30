@@ -27,7 +27,8 @@ import {
   isAttemptTimeoutError,
   recordSeatMetric,
 } from "./metrics.js";
-import { remainingMs, seatBudgetMs, withTimeout } from "./timeouts.js";
+import { canStartAttempt, remainingMs, seatBudgetMs, withTimeout } from "./timeouts.js";
+import { type BudgetProfile } from "./budgetProfile.js";
 
 const OUTER_BUDGET_MS = 85_000;
 const DECOMPOSE_CAP_MS = 15_000;
@@ -63,6 +64,7 @@ type RegisterOpts = {
   openrouterApiKey: string | undefined;
   geminiTransport: GeminiTransport;
   xaiBaseUrl?: string;
+  budget?: BudgetProfile;
 };
 
 export function coerceMode(raw: unknown): LegMode {
@@ -269,7 +271,7 @@ async function runLeg(
 
           let r = await callOnce();
           // Cap retries under budget: at most 1 miss-retry for fanout (tighter than panel).
-          if (r.citations.length === 0 && remainingMs(t0, budgetMs) > 8_000) {
+          if (r.citations.length === 0 && canStartAttempt(t0, budgetMs)) {
             console.error(`[research_fanout] ${id} gemini grounded miss — retry 1/1`);
             r = await callOnce();
           }
@@ -377,6 +379,7 @@ async function synthesize(
 
 export function registerResearchFanout(server: any, opts: RegisterOpts) {
   const geminiClient = makeGeminiClient(opts.geminiApiKey);
+  const outerBudgetMs = opts.budget?.fanoutOuterMs ?? OUTER_BUDGET_MS;
 
   server.registerTool(
     "research_fanout",
@@ -482,7 +485,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
 
       try {
         // --- decompose ---
-        const decBudget = Math.min(DECOMPOSE_CAP_MS, remainingMs(outerT0, OUTER_BUDGET_MS));
+        const decBudget = Math.min(DECOMPOSE_CAP_MS, remainingMs(outerT0, outerBudgetMs));
         const decT0 = Date.now();
         let { plans, source } = await decompose(opts.openrouterApiKey, args.prompt, maxLegs, decBudget);
         plans = ensureForceX(plans, !!args.force_x_leg, maxLegs);
@@ -490,12 +493,12 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
 
         // --- legs ---
         const legsT0 = Date.now();
-        const legPhaseBudget = Math.min(LEG_PHASE_CAP_MS, remainingMs(outerT0, OUTER_BUDGET_MS));
+        const legPhaseBudget = Math.min(LEG_PHASE_CAP_MS, remainingMs(outerT0, outerBudgetMs));
         const settled = await mapLimitSettled(plans, CONCURRENCY, async (plan, i) => {
           const id = `leg-${i}`;
           const budget = seatBudgetMs(legsT0, legPhaseBudget, LEG_SEAT_CAP_MS);
           // Also respect outer wall
-          const outerLeft = remainingMs(outerT0, OUTER_BUDGET_MS);
+          const outerLeft = remainingMs(outerT0, outerBudgetMs);
           const b = Math.min(budget, outerLeft);
           return runLeg(opts, geminiClient, plan, id, effort, b, qHash);
         });
@@ -520,7 +523,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
 
         if (doSynth && summary.okCount > 0) {
           const synthT0 = Date.now();
-          const synthBudget = Math.min(SYNTH_CAP_MS, remainingMs(outerT0, OUTER_BUDGET_MS));
+          const synthBudget = Math.min(SYNTH_CAP_MS, remainingMs(outerT0, outerBudgetMs));
           const lensed = applyLens(args.lens, args.system);
           const sys = lensed.error ? args.system : lensed.system;
           try {
@@ -553,7 +556,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
             decompose_source: source,
             max_legs: maxLegs,
             planned: plans,
-            budget_ms: OUTER_BUDGET_MS,
+            budget_ms: outerBudgetMs,
             elapsed_ms: Date.now() - outerT0,
             phases,
           },

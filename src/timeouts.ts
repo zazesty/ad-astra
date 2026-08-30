@@ -34,3 +34,28 @@ export function seatBudgetMs(
 ): number {
   return Math.min(seatCapMs, remainingMs(startedAt, outerBudgetMs, now));
 }
+
+/**
+ * Don't start another provider call (grounding retry / OR→direct failover)
+ * unless this much seat budget remains. Direct grounded-gemini p50 is ~13s.
+ */
+export const MIN_NEXT_ATTEMPT_MS = 12_000;
+
+export function canStartAttempt(
+  startedAt: number,
+  budgetMs: number,
+  minMs: number = MIN_NEXT_ATTEMPT_MS,
+  now: number = Date.now(),
+): boolean {
+  return remainingMs(startedAt, budgetMs, now) >= minMs;
+}
+
+/** Per-attempt abort capped by remaining seat budget (leave 500ms to serialize). */
+export function capAttemptMs(
+  startedAt: number,
+  budgetMs: number,
+  attemptCapMs: number,
+  now: number = Date.now(),
+): number {
+  return Math.min(attemptCapMs, Math.max(1_000, remainingMs(startedAt, budgetMs, now) - 500));
+}

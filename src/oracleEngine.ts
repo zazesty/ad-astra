@@ -43,8 +43,9 @@ import {
   recordSeatMetric,
   type SeatMetricRecord,
 } from "./metrics.js";
-import { withTimeout } from "./timeouts.js";
+import { canStartAttempt, capAttemptMs, MIN_NEXT_ATTEMPT_MS, remainingMs, withTimeout } from "./timeouts.js";
 import { GPT_OPENROUTER_SLUG, OPENROUTER_AUTO_SLUG } from "./modelPins.js";
+import { CLI_BUDGET, type BudgetProfile } from "./budgetProfile.js";
 
 export type { Effort, FusionPreset };
 
@@ -58,6 +59,13 @@ export interface OracleDeps {
   geminiApiKey?: string; // direct @google/genai key — the OR→direct failover substrate
   openrouterApiKey?: string;
   xaiBaseUrl?: string;
+  budget?: BudgetProfile;
+}
+
+type AttemptBudget = { startedAt: number; budgetMs: number };
+
+function oracleBudget(deps: OracleDeps): BudgetProfile {
+  return deps.budget ?? CLI_BUDGET;
 }
 
 // Overrides (§7). `specs` (the deterministic ask_panel bypass) is handled one
@@ -334,29 +342,7 @@ export function buildRoutePlan(
 
 // ── §5 executeSlots — concurrent, partial-tolerant ────────────────────────────
 const CONCURRENCY = 5;
-// Plain reasoning seats (openrouter/auto-beta, gemini, openai/Terra via OR).
-// 2026-08 metrics: oracle openai ungrounded timed out on ~57% of seats at the
-// old 40s SLOT ceiling (p50 glued to 40s). Concurrent seats mean this only
-// raises worst-case wall-clock, not sum. 70s leaves ~10s after a 60s OR attempt
-// for OR→direct failover (same idea as panel gemini 100s seat / 60s attempt).
-const SLOT_TIMEOUT_MS = 70_000;
-// Per-attempt OR abort for ungrounded reasoning (orReasoningWithFailover).
-// Default global OR_ATTEMPT_TIMEOUT_MS=15s killed slow-but-legit high-effort
-// answers before failover could help; align with panel's 60s OR attempt.
-const OR_REASONING_ATTEMPT_TIMEOUT_MS = 60_000;
-// Grok-DIRECT reasoning seats (high effort, ungrounded). xAI reasoning latency now
-// routinely exceeds the old 40s OR ceiling (live evidence 2026-06-26: high-effort
-// grok-direct reasoning seat `reason-1` timed out at 40s, retried, timed out again
-// → ~80s burned before salvage). Match the widened reasoning slot budget.
-const GROK_REASONING_TIMEOUT_MS = 70_000;
-// Capability seats (live-X / grounded) do live search + up to MAX_GROUNDING_RETRIES
-// sequential re-calls, so a 25s ceiling cut them off (gemini-grounded timed out
-// 2026-06-24 while reasoning seats finished) — and a dropped capability seat is the
-// one we LEAST want to lose. Give them a wider budget that fits the retry chain.
-const CAPABILITY_SLOT_TIMEOUT_MS = 60_000;
-// OR Fusion runs an internal panel + judge — budget matches locked v1 (120s seat / 110s fetch).
-const FUSION_SLOT_TIMEOUT_MS = 120_000;
-const FUSION_OR_ATTEMPT_TIMEOUT_MS = 110_000;
+// Slot / OR attempt caps: BudgetProfile (cli = 2026-08 numbers; chat = 50s envelope).
 // 1 retry (= 2 grounded calls). ask_panel uses 2, but oracle differs deliberately:
 // (a) a 3-call chain at high effort can stall past the 60s capability budget (a single
 // slow grounded call → seat timeout, see Grok find 2026-06-25), and (b) oracle has the
@@ -418,9 +404,16 @@ async function groundedWithRetry(
   once: () => Promise<{ text: string; citations: string[] }>,
   seatId: string,
   pathLabel: string,
+  attemptBudget?: AttemptBudget,
 ): Promise<{ text: string; citations: string[] }> {
   let r = await once();
   for (let attempt = 1; attempt <= MAX_GROUNDING_RETRIES && r.citations.length === 0; attempt++) {
+    if (attemptBudget && !canStartAttempt(attemptBudget.startedAt, attemptBudget.budgetMs)) {
+      console.error(
+        `[ask_oracle] skip grounding retry, ${remainingMs(attemptBudget.startedAt, attemptBudget.budgetMs)}ms left. seat=${seatId} path=${pathLabel}`,
+      );
+      break;
+    }
     console.error(`[ask_oracle] gemini grounded miss (0 citations) — retry ${attempt}/${MAX_GROUNDING_RETRIES}. seat=${seatId} path=${pathLabel}`);
     r = await once();
   }
@@ -443,20 +436,32 @@ async function groundedWithFailover(
   prompt: string,
   s: Seat,
   system: string | undefined,
+  attemptBudget: AttemptBudget,
 ): Promise<DispatchOutcome> {
+  const profile = oracleBudget(deps);
   const orOnce = () =>
     callOpenRouter(deps.openrouterApiKey, s.model_slug, prompt, {
       system,
       reasoning_effort: s.reasoning_effort,
       grounded: true,
+      attempt_timeout_ms: capAttemptMs(attemptBudget.startedAt, attemptBudget.budgetMs, profile.oracleOrAttemptMs),
     });
+  const skipFailover = (why: string, e: unknown): never => {
+    console.error(
+      `[ask_oracle] skip failover (${why}), ${remainingMs(attemptBudget.startedAt, attemptBudget.budgetMs)}ms left. seat=${s.id}`,
+    );
+    throw e;
+  };
   try {
-    const r = await groundedWithRetry(orOnce, s.id, "or-native");
+    const r = await groundedWithRetry(orOnce, s.id, "or-native", attemptBudget);
     return { ...r, transport: "or", failover_fired: false };
   } catch (e) {
     const groundingMiss =
       e instanceof Error && e.message.includes("grounding_fired:false");
     if (groundingMiss) {
+      if (!canStartAttempt(attemptBudget.startedAt, attemptBudget.budgetMs)) {
+        skipFailover("grounding miss", e);
+      }
       console.error(
         `[ask_oracle] OR grounding miss on seat ${s.id} — failover → direct-gemini grounding`,
       );
@@ -467,14 +472,17 @@ async function groundedWithFailover(
           reasoning_effort: s.reasoning_effort,
           grounded: true,
         });
-      const r = await groundedWithRetry(directOnce, s.id, "direct-grounding-miss");
+      const r = await groundedWithRetry(directOnce, s.id, "direct-grounding-miss", attemptBudget);
       return { ...r, transport: "direct", failover_fired: true };
     }
     if (!isTransientError(e)) throw e;
+    if (!canStartAttempt(attemptBudget.startedAt, attemptBudget.budgetMs)) {
+      skipFailover("OR transient", e);
+    }
     console.error(`[ask_oracle] OR transient fail on grounded seat ${s.id} — failover → direct-gemini grounding: ${(e as Error).message}`);
     const client = makeGeminiClient(deps.geminiApiKey);
     const directOnce = () => callGemini(client, prompt, { system, reasoning_effort: s.reasoning_effort, grounded: true });
-    const r = await groundedWithRetry(directOnce, s.id, "direct-failover");
+    const r = await groundedWithRetry(directOnce, s.id, "direct-failover", attemptBudget);
     return { ...r, transport: "direct", failover_fired: true };
   }
 }
@@ -491,15 +499,23 @@ async function orReasoningWithFailover(
   slug: string,
   prompt: string,
   opts: { system?: string; reasoning_effort: Effort },
+  attemptBudget: AttemptBudget,
 ): Promise<DispatchOutcome> {
+  const profile = oracleBudget(deps);
   try {
     const r = await callOpenRouter(deps.openrouterApiKey, slug, prompt, {
       ...opts,
-      attempt_timeout_ms: OR_REASONING_ATTEMPT_TIMEOUT_MS,
+      attempt_timeout_ms: capAttemptMs(attemptBudget.startedAt, attemptBudget.budgetMs, profile.oracleOrAttemptMs),
     });
     return { text: r.text, citations: r.citations, transport: "or", failover_fired: false };
   } catch (e) {
     if (!isTransientError(e)) throw e;
+    if (!canStartAttempt(attemptBudget.startedAt, attemptBudget.budgetMs)) {
+      console.error(
+        `[ask_oracle] skip reasoning failover, ${remainingMs(attemptBudget.startedAt, attemptBudget.budgetMs)}ms left. slug=${slug}`,
+      );
+      throw e;
+    }
     if (/gemini/i.test(slug)) {
       console.error(`[ask_oracle] OR transient fail on ${slug} — failover → direct-gemini: ${(e as Error).message}`);
       const r = await callGemini(makeGeminiClient(deps.geminiApiKey), prompt, {
@@ -524,16 +540,22 @@ async function fusionDispatch(
   deps: OracleDeps,
   prompt: string,
   s: Seat,
-  callerSystem?: string,
+  callerSystem: string | undefined,
+  attemptBudget: AttemptBudget,
 ): Promise<DispatchOutcome> {
   const { system, error } = applyLens(s.lens, callerSystem);
   if (error) throw new Error(error);
+  const profile = oracleBudget(deps);
   const r = await callOpenRouter(deps.openrouterApiKey, FUSION_MODEL_SLUG, prompt, {
     system,
     reasoning_effort: s.reasoning_effort,
     fusion_preset: s.fusion_preset ?? DEFAULT_FUSION_PRESET,
     tool_choice: "required",
-    attempt_timeout_ms: FUSION_OR_ATTEMPT_TIMEOUT_MS,
+    attempt_timeout_ms: capAttemptMs(
+      attemptBudget.startedAt,
+      attemptBudget.budgetMs,
+      profile.oracleFusionOrAttemptMs,
+    ),
   });
   return { text: r.text, citations: r.citations, transport: "or", failover_fired: false };
 }
@@ -542,7 +564,8 @@ async function dispatchSeat(
   deps: OracleDeps,
   prompt: string,
   s: Seat,
-  callerSystem?: string,
+  callerSystem: string | undefined,
+  attemptBudget: AttemptBudget,
 ): Promise<DispatchOutcome> {
   // lens body first, caller's system text after (applyLens composes them).
   const { system, error } = applyLens(s.lens, callerSystem);
@@ -562,30 +585,31 @@ async function dispatchSeat(
     );
     return { text: r.text, citations: r.citations, transport: "direct", failover_fired: false };
   }
-  if (s.grounded) return groundedWithFailover(deps, prompt, s, system);
-  if (isFusionSeat(s)) return fusionDispatch(deps, prompt, s, callerSystem);
+  if (s.grounded) return groundedWithFailover(deps, prompt, s, system, attemptBudget);
+  if (isFusionSeat(s)) return fusionDispatch(deps, prompt, s, callerSystem, attemptBudget);
   return orReasoningWithFailover(deps, s.model_slug, prompt, {
     system,
     reasoning_effort: s.reasoning_effort,
-  });
+  }, attemptBudget);
 }
 
 async function executeSlots(
   deps: OracleDeps,
   prompt: string,
   seats: Seat[],
-  callerSystem?: string,
+  callerSystem: string | undefined,
+  oracleT0: number,
 ): Promise<SlotResult[]> {
+  const profile = oracleBudget(deps);
   return mapLimit(seats, CONCURRENCY, async (s) => {
     const capability = isCapabilitySeat(s);
     const fusion = isFusionSeat(s);
     const grokReasoning = s.provider === "grok-direct" && !capability;
-    // Grok-direct reasoning seats share the widened reasoning budget
-    // (see GROK_REASONING_TIMEOUT_MS / SLOT_TIMEOUT_MS).
-    const timeoutMs = fusion ? FUSION_SLOT_TIMEOUT_MS
-      : capability ? CAPABILITY_SLOT_TIMEOUT_MS
-      : grokReasoning ? GROK_REASONING_TIMEOUT_MS
-      : SLOT_TIMEOUT_MS;
+    const slotCap = fusion ? profile.oracleFusionMs
+      : capability ? profile.oracleCapabilityMs
+      : grokReasoning ? profile.oracleGrokReasoningMs
+      : profile.oracleSlotMs;
+    const timeoutMs = Math.min(slotCap, remainingMs(oracleT0, profile.oracleOuterMs));
     // Timeout-retry applies to REASONING seats only. A capability seat already runs
     // an internal retry chain inside a long (60s) budget, so a SEAT timeout means a
     // single grounded/x call genuinely stalled — re-running the whole chain just
@@ -597,13 +621,16 @@ async function executeSlots(
     // (high-effort grok just takes that long), so a retry re-runs the identical slow
     // call → guaranteed second timeout → ~2×latency before salvage, no benefit
     // (Grok find 2026-06-26). OR reasoning (auto/gemini) keeps its 1 retry — a
-    // timeout there is more plausibly transient.
-    const maxAttempts = (capability || grokReasoning || fusion) ? 0 : MAX_TIMEOUT_RETRIES;
+    // timeout there is more plausibly transient. Chat envelope: no timeout-retry
+    // (doubling a 50s slot blows the client window).
+    const maxAttempts =
+      profile.name === "chat" || capability || grokReasoning || fusion ? 0 : MAX_TIMEOUT_RETRIES;
     let lastMsg = "";
     for (let attempt = 0; attempt <= maxAttempts; attempt++) {
       const t0 = Date.now();
+      const attemptBudget: AttemptBudget = { startedAt: t0, budgetMs: timeoutMs };
       try {
-        const r = await withTimeout(dispatchSeat(deps, prompt, s, callerSystem), timeoutMs, s.id);
+        const r = await withTimeout(dispatchSeat(deps, prompt, s, callerSystem, attemptBudget), timeoutMs, s.id);
         return {
           seat: s,
           status: "ok" as const,
@@ -679,7 +706,12 @@ function recordOracleMetrics(
 }
 
 // ── §6 assemble ───────────────────────────────────────────────────────────────
-async function synthesize(deps: OracleDeps, route: RoutePlan, oks: SlotResult[]): Promise<string> {
+async function synthesize(
+  deps: OracleDeps,
+  route: RoutePlan,
+  oks: SlotResult[],
+  oracleT0?: number,
+): Promise<string> {
   const blocks = oks
     .map((r) => `## ${r.seat.id}\n${r.text}${r.citations?.length ? `\n\nSources:\n${r.citations.join("\n")}` : ""}`)
     .join("\n\n");
@@ -696,10 +728,18 @@ async function synthesize(deps: OracleDeps, route: RoutePlan, oks: SlotResult[])
   // Judge runs through the same OR→direct failover as reasoning seats — synthesize
   // is the headless path (synthesize:true), so it must survive an OR outage rather
   // than hard-error. GEMINI_PRO_SLUG is gemini → fails over to direct-gemini.
+  const profile = oracleBudget(deps);
+  const t0 = Date.now();
+  const budgetMs = oracleT0
+    ? Math.min(profile.oracleSlotMs, remainingMs(oracleT0, profile.oracleOuterMs))
+    : profile.oracleSlotMs;
+  if (budgetMs < MIN_NEXT_ATTEMPT_MS) {
+    throw new Error("synthesize skipped, outer budget exhausted");
+  }
   const r = await orReasoningWithFailover(deps, GEMINI_PRO_SLUG, blocks, {
     system,
     reasoning_effort: route.reasoning_effort,
-  });
+  }, { startedAt: t0, budgetMs });
   return r.text;
 }
 
@@ -709,6 +749,7 @@ export async function assemble(
   results: SlotResult[],
   ov: OracleOverrides,
   classifierFellBack: boolean,
+  oracleT0?: number,
 ): Promise<OracleResponse> {
   const slots_status: SlotStatus[] = results.map((r) => ({
     id: r.seat.id,
@@ -769,7 +810,7 @@ export async function assemble(
     if (oks.length === 1 && oks[0].seat.id === "fusion") {
       resp.answer = oks[0].text!;
     } else {
-      resp.answer = oks.length ? await synthesize(deps, route, oks) : "(no seat returned a usable answer)";
+      resp.answer = oks.length ? await synthesize(deps, route, oks, oracleT0) : "(no seat returned a usable answer)";
     }
   } else {
     resp.raw = oks.map((r) => ({
@@ -806,6 +847,8 @@ export async function runOracle(
   prompt: string,
   ov: OracleOverrides = {},
 ): Promise<OracleResponse> {
+  const profile = oracleBudget(deps);
+  const oracleT0 = Date.now();
   let classification: Classification;
   let source: RoutePlan["source"] = "classifier";
   let classifierModel: string | null = CLASSIFIER_MODEL;
@@ -829,7 +872,7 @@ export async function runOracle(
     route.engine = "fusion";
     route.fusion_preset = ov.fusion_preset ?? DEFAULT_FUSION_PRESET;
   }
-  let results = await executeSlots(deps, prompt, seats, ov.system);
+  let results = await executeSlots(deps, prompt, seats, ov.system, oracleT0);
 
   // Salvage net: if EVERY seat failed — the lone grounded-only route failing loud
   // on zero citations is the motivating case, but also all-timeout nights — make
@@ -851,8 +894,17 @@ export async function runOracle(
       reasoning_effort: capEffort(seats[0]?.reasoning_effort ?? "high", "medium"),
     };
     const salvageT0 = Date.now();
-    try {
-      const r = await withTimeout(dispatchSeat(deps, prompt, salvageSeat, ov.system), SLOT_TIMEOUT_MS, salvageSeat.id);
+    const salvageMs = Math.min(profile.oracleSlotMs, remainingMs(oracleT0, profile.oracleOuterMs));
+    if (salvageMs < MIN_NEXT_ATTEMPT_MS) {
+      console.error(
+        `[ask_oracle] skip salvage, ${remainingMs(oracleT0, profile.oracleOuterMs)}ms left on outer`,
+      );
+    } else try {
+      const r = await withTimeout(
+        dispatchSeat(deps, prompt, salvageSeat, ov.system, { startedAt: salvageT0, budgetMs: salvageMs }),
+        salvageMs,
+        salvageSeat.id,
+      );
       results = [...results, {
         seat: salvageSeat,
         status: "ok",
@@ -868,7 +920,7 @@ export async function runOracle(
     }
   }
   recordOracleMetrics(prompt, route, results);
-  return assemble(deps, route, results, ov, !!classifierError);
+  return assemble(deps, route, results, ov, !!classifierError, oracleT0);
 }
 
 // ── MCP tool registration (step 4) ────────────────────────────────────────────
@@ -877,6 +929,7 @@ export type OracleRegisterOpts = {
   geminiApiKey?: string;
   openrouterApiKey?: string;
   xaiBaseUrl?: string;
+  budget?: BudgetProfile;
 };
 
 /**
@@ -894,6 +947,7 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
     geminiApiKey: opts.geminiApiKey,
     openrouterApiKey: opts.openrouterApiKey,
     xaiBaseUrl: opts.xaiBaseUrl,
+    budget: opts.budget,
   };
 
   server.registerTool(
