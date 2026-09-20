@@ -55,6 +55,7 @@ const ok = (name) => { console.log(`ok - ${name}`); pass++; };
   const cfg = loadFeedsConfig();
   assert.ok(cfg.sections.ai && cfg.sections.macro && cfg.sections.industry, "all three sections present");
   assert.equal(cfg.sections.industry.cap, 3, "industry section is hard-capped at 3");
+  assert.equal(cfg.sections.ai.cap, 6, "AI section is capped at 6 (~half old equal share)");
   // challenger voices must be present and flagged
   const challengers = cfg.sections.macro.feeds.filter((f) => f.challenger).map((f) => f.source);
   for (const name of ["Joseph Wang / FedGuy", "Adam Tooze / Chartbook", "Brad Setser / Follow the Money"]) {

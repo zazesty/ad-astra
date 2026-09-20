@@ -113,11 +113,11 @@ you call tool -> fetch curated feeds (last N days) -> dedupe -> LLM COMPRESS -> 
   rebuild/restart. Adding a source = drop a `{source, url}` into a section. The
   curated list **is** the quality control — the summarizer has no web access, so a
   source not in `feeds.json` cannot enter the digest.
-- **Params:** `days` (default 4), `sections` (default all), `email` (default true),
-  `max_items` (default 24). `industry` is hard-capped (ambient awareness, not a
-  dashboard); the rest (`ai`, `macro`) share the remaining budget by **fair
-  round-robin** — one newest item from each section per round — so the high-volume
-  AI feeds can't starve the lower-frequency macro section.
+- **Params:** `days` (default 4), `sections` (default all, render order
+  **macro → AI → industry**), `email` (default true), `max_items` (default 24).
+  `industry` is hard-capped at 3 (ambient awareness, not a dashboard). `ai` is
+  capped at 6 (~half its old equal share of the global cap). Uncapped `macro`
+  takes the remaining budget so the high-volume AI feeds can't starve it.
 - **Delivery (`email`):** `email:true` (default) emails the full digest to the
   configured recipient (`NOTIFY_EMAIL_TO`) and returns **only a short confirmation**
   (per-section counts + window + recipient) — the token-saving path, keeping the

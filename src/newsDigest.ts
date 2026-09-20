@@ -510,14 +510,14 @@ export function registerNewsDigest(server: any, deps: SummarizeDeps & { z: typeo
         sections: z
           .array(z.enum(["ai", "macro", "industry"]))
           .optional()
-          .describe("Which sections to include (default all: ai, macro, industry). 'industry' is intentionally light (capped)."),
+          .describe("Which sections to include (default all, render order: macro, ai, industry). Macro leads. 'ai' is capped (~half its old equal share); 'industry' is intentionally light."),
         email: z.boolean().optional().describe("Delivery mode (default true). true = email the full digest to the configured recipient and return ONLY a short confirmation (token-saving: digest stays out of model context; on send failure it falls back to returning the digest inline). false = return the full digest inline and send no email. In-chat/interactive callers who want to READ the digest in the reply must pass false — the default keeps the content out of the model context."),
-        max_items: z.number().int().min(1).max(60).optional().describe("Global cap on items handed to the summarizer (default 24). Capped sections like 'industry' are kept whole; the rest (ai, macro) share the remaining budget by FAIR round-robin (so a high-volume section can't starve a quieter one). Raise for a fuller digest, lower for a tighter one."),
+        max_items: z.number().int().min(1).max(60).optional().describe("Global cap on items handed to the summarizer (default 24). Capped sections (industry, ai) are kept whole up to their feeds.json cap; uncapped sections (macro) take the remaining budget, fair round-robin if more than one. Raise for a fuller digest, lower for a tighter one."),
       },
     },
     async ({ days, sections, email, max_items }: { days?: number; sections?: string[]; email?: boolean; max_items?: number }) => {
       try {
-        const secs = sections?.length ? sections : ["ai", "macro", "industry"];
+        const secs = sections?.length ? sections : ["macro", "ai", "industry"];
         const sendMail = email ?? true;
         const maxItems = max_items ?? 24;
         const now = Date.now();

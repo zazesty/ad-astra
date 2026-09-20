@@ -8,8 +8,8 @@
   "sections": {
     "ai": {
       "title": "AI / frontier",
-      "cap": null,
-      "note": "The main course. Official model-maker sources first (least hype), then one or two curators. If you add aggregators, keep it to a couple — the curated list is the point, not breadth.",
+      "cap": 6,
+      "note": "Tighter slice, not the main course. Cap 6 = ~half the old equal-share of max_items 24. Official model-maker sources first (least hype), then curators. If you add aggregators, keep it to a couple — the curated list is the point, not breadth.",
       "feeds": [
         { "source": "OpenAI", "url": "https://openai.com/news/rss.xml" },
         { "source": "Google AI", "url": "https://blog.google/technology/ai/rss/" },
