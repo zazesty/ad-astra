@@ -25,6 +25,7 @@ import {
   familyFromSlug,
   hashQuestion,
   isAttemptTimeoutError,
+  loggedReasoningEffort,
   recordSeatMetric,
 } from "./metrics.js";
 import { canStartAttempt, remainingMs, seatBudgetMs, withTimeout } from "./timeouts.js";
@@ -203,7 +204,7 @@ async function runLeg(
   geminiClient: GeminiClient | null,
   plan: LegPlan,
   id: string,
-  effort: "low" | "medium" | "high",
+  effort: "low" | "medium" | "high" | undefined,
   budgetMs: number,
   qHash: string,
 ): Promise<LegResult> {
@@ -238,7 +239,10 @@ async function runLeg(
       grounded_requested: true,
       grounding_fired: ok && (leg.citations?.length ?? 0) > 0,
       x_search_fired: ok && plan.mode === "grok_x" && (leg.citations?.length ?? 0) > 0,
-      reasoning_effort: effort,
+      reasoning_effort: loggedReasoningEffort(
+        plan.mode.startsWith("grok") ? "grok" : DEFAULT_OPENROUTER_GEMINI_MODEL,
+        effort,
+      ),
       latency_ms: leg.latency_ms,
       failover_fired: false,
       timed_out: leg.status === "timeout",
@@ -404,7 +408,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
         "timeout/shallow routing; " +
         "(4) trivial textbook constants (\"boiling point of water\") → may " +
         "grounding_miss fail-loud with degraded:true and no answer (by design, not a bug). " +
-        "FLOW: decompose ≤max_legs → parallel provider-core legs (default gemini web-grounded; " +
+        "FLOW: decompose ≤max_legs → parallel provider-core legs (default Gemini Flash latest, web-grounded; " +
         "optional grok_x / grok_grounded; no nested tools) → synth merges + citation union " +
         "OR synthesize:false returns raw legs. Legs fail independently; partial return + " +
         "degraded/slots_status. Hard ~85s outer budget; healthy complex runs often ~30–45s; " +
@@ -479,7 +483,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
       const outerT0 = Date.now();
       const maxLegs = Math.min(MAX_LEGS_HARD, Math.max(1, args.max_legs ?? 4));
       const doSynth = args.synthesize !== false;
-      const effort = args.reasoning_effort ?? "high";
+      const effort = args.reasoning_effort;
       const qHash = hashQuestion(args.prompt);
       const phases = { decompose_ms: 0, legs_ms: 0, synth_ms: undefined as number | undefined };
 

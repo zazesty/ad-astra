@@ -6,7 +6,7 @@
  *
  * A 1-element spec array is the single-query path (this tool replaced the old
  * standalone ask_grok / ask_gemini). Live-X is model:grok + grounded:true
- * (auto contract). OpenAI + Claude (opus/sonnet) are OR-only (pinned slugs).
+ * (auto contract). OpenAI + Claude (sonnet) are OR-only (pinned slugs).
  *
  * One spec failing must not nuke the others — we use an allSettled-style runner
  * (mapLimit) with a small concurrency cap so large batches don't trip
@@ -31,6 +31,7 @@ import {
   familyFromSlug,
   hashQuestion,
   isAttemptTimeoutError,
+  loggedReasoningEffort,
   recordSeatMetric,
 } from "./metrics.js";
 import { canStartAttempt, capAttemptMs, remainingMs, seatBudgetMs, withTimeout } from "./timeouts.js";
@@ -79,13 +80,14 @@ type RegisterOpts = {
   budget?: BudgetProfile;
 };
 
-/** Short-term: Grok chat still sends model:opus; run sonnet. Schema cull later (rotation). */
+/** Opus is gone from the schema. A stale caller, or an opus model_slug, still runs sonnet. */
 export function applyOpusRemap(spec: { model: string; model_slug?: string }): {
   model: string;
   model_slug?: string;
   remapped_from?: "opus";
 } {
-  if (spec.model !== "opus") {
+  const slugIsOpus = !!spec.model_slug && /opus/i.test(spec.model_slug);
+  if (spec.model !== "opus" && !(spec.model === "sonnet" && slugIsOpus)) {
     return { model: spec.model, model_slug: spec.model_slug };
   }
   const keepSlug = spec.model_slug && !/opus/i.test(spec.model_slug) ? spec.model_slug : undefined;
@@ -128,13 +130,13 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
 
   const specSchema = z.object({
     model: z
-      .enum(["grok", "gemini", "openai", "opus", "sonnet"])
+      .enum(["grok", "gemini", "openai", "sonnet"])
       .describe(
-        "Backend for this spec. 'grok' (xAI, direct) — contrarian; grounded:true searches X " +
-          "(+web if include_web). 'gemini' (Google) — strong reasoning + best live web grounding. " +
-          "'openai' (OpenRouter only, pinned gpt-5.6-terra) — third-family voice. " +
-          "'opus' / 'sonnet' (OpenRouter Anthropic, ~claude-opus-latest / ~claude-sonnet-latest) — Claude seats. " +
-          "openai/opus/sonnet: no native web/X grounding (grounded:true errors).",
+        "Backend for this spec. 'grok' (xAI direct, grok-4.6) — contrarian; grounded:true searches X " +
+          "(+web if include_web). 'gemini' (Gemini Flash latest) — strong reasoning + best live web grounding. " +
+          "'openai' (OpenRouter, GPT-6 Sol) — third-family voice. " +
+          "'sonnet' (Sonnet latest) — Claude seat. " +
+          "openai/sonnet: no native web/X grounding (grounded:true errors).",
       ),
     prompt: z
       .string()
@@ -150,7 +152,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .describe(
         "Back the answer with LIVE retrieval. For ANYTHING factual/current set true. " +
           "Gemini → Google Search; Grok → X (+web if include_web), auto mode (search only if needed). " +
-          "openai/opus/sonnet → not supported (errors). Default false.",
+          "openai/sonnet → not supported (errors). Default false.",
       ),
     include_web: z
       .boolean()
@@ -164,7 +166,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     reasoning_effort: z
       .enum(["low", "medium", "high"])
       .optional()
-      .describe("How hard the model thinks before answering (low|medium|high). Defaults to high for Gemini/Grok/OpenAI/Claude; all three levels are honored."),
+      .describe("How hard the model thinks (low|medium|high). Omit for the seat default: Gemini Flash latest is sent high; Grok and Sonnet latest leave the field off (their default is high); GPT-6 Sol leaves it off (its default is medium)."),
     temperature: z
       .number()
       .optional()
@@ -175,7 +177,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .describe(
         "Advanced: override the exact model id (grok-*, gemini-*, OpenRouter openai/* or anthropic/* slug). " +
           "Omit unless you know the exact slug — server defaults are almost always right " +
-          "(openai→Terra, opus→claude-opus-latest, sonnet→claude-sonnet-latest).",
+          "(openai→GPT-6 Sol, sonnet→Sonnet latest, gemini→Gemini Flash latest).",
       ),
   });
 
@@ -186,10 +188,10 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       description:
         "HAND-PICK one or more models and get raw, labeled answers back for YOU to synthesize. " +
         "Specs run CONCURRENTLY (wall-clock ≈ slowest seat, not the sum). 1-spec = single call " +
-        "(the way to ask Grok, Gemini, OpenAI, or Claude one question). Multi-spec = second opinions / " +
-        "cross-family panel (e.g. grok + gemini + openai, or opus + sonnet, or same model at two temps). " +
-        "Each spec picks model ('grok'|'gemini'|'openai'|'opus'|'sonnet'), optional live grounding " +
-        "(gemini web / grok X; openai/opus/sonnet cannot ground), lens, and temperature. Results stay " +
+        "(the way to ask grok-4.6, Gemini Flash latest, GPT-6 Sol, or Sonnet latest one question). Multi-spec = second opinions / " +
+        "cross-family panel (e.g. grok + gemini + openai, or sonnet beside them, or same model at two temps). " +
+        "Each spec picks model ('grok'|'gemini'|'openai'|'sonnet'), optional live grounding " +
+        "(gemini web / grok X; openai/sonnet cannot ground), lens, and temperature. Results stay " +
         "in input order with ok flags; one seat failing does NOT fail siblings. This tool GATHERS — it " +
         "does not judge. Auto-routing counterpart: ask_consortium (classifies and picks seats for you). " +
         "Live-X sentiment: model:'grok' grounded:true (citations when search fires). " +
@@ -250,7 +252,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             grounded_requested: !!spec.grounded,
             grounding_fired: ok && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
             x_search_fired: ok && model === "grok" && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
-            reasoning_effort: spec.reasoning_effort ?? "medium",
+            reasoning_effort: loggedReasoningEffort(extra.model_slug || defaultSlug, spec.reasoning_effort),
             latency_ms: Date.now() - t0,
             failover_fired: !!extra.failover_fired,
             timed_out: !!extra.timed_out || isAttemptTimeoutError(extra.error),
@@ -491,7 +493,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
 
       const results = settled.map((r, i) => {
         const label = specs[i].label ?? specs[i].model;
-        const remapped_from = specs[i].model === "opus" ? "opus" : undefined;
+        const remapped_from = applyOpusRemap(specs[i]).remapped_from;
         if (r.status === "fulfilled") {
           const out: Record<string, unknown> = { label, ok: true, text: r.value.text };
           if (r.value.citations?.length) out.citations = r.value.citations;

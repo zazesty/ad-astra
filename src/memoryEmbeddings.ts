@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { GoogleGenAI } from "@google/genai";
 import type { MemoryFact } from "./memory.js";
 
-/** AI Studio embed model (text-embedding-004 404s on v1beta for this key). */
-const EMBED_MODEL = "gemini-embedding-001";
+/** AI Studio embed model. No floating latest alias; 001's successor is embedding-2. */
+const EMBED_MODEL = "gemini-embedding-2";
 
 export function embeddingsPath(memoryDir: string): string {
   return join(memoryDir, ".embeddings.json");

@@ -27,14 +27,36 @@
  * annotations when grounding ran.
  */
 
-import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+import { GoogleGenAI, ServiceTier, ThinkingLevel } from "@google/genai";
 
-export const DEFAULT_GEMINI_MODEL = "gemini-pro-latest";
-// OpenRouter floating alias — "always redirects to the latest Gemini Pro".
-// Matches the direct path's `gemini-pro-latest` semantics. The leading "~" is
-// part of the real API slug for OpenRouter's floating aliases (verified live:
-// the un-prefixed "google/gemini-pro-latest" returns a 400 invalid-model-ID).
-export const DEFAULT_OPENROUTER_GEMINI_MODEL = "~google/gemini-pro-latest";
+export const DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
+// OpenRouter floating alias — "always redirects to the latest Gemini Flash".
+// Matches the direct path's `gemini-flash-latest`. The leading "~" is part of
+// the real API slug (a bare "google/gemini-flash-latest" 400s, same as pro did).
+export const DEFAULT_OPENROUTER_GEMINI_MODEL = "~google/gemini-flash-latest";
+
+/**
+ * Gemini 3 Flash and Pro accept thinking levels. Flash-Lite stays on its own
+ * minimal default (the classifier). Gemini 2.5 Flash 400s on thinkingLevel.
+ */
+export function geminiHonorsThinking(model: string): boolean {
+  if (!/gemini/i.test(model)) return false;
+  if (/lite/i.test(model)) return false;
+  if (/2\.5/.test(model)) return false;
+  return /flash/i.test(model) || /pro-latest/i.test(model) || /-pro\b/i.test(model);
+}
+
+/**
+ * Effort actually attached to a request.
+ * Gemini Flash/Pro (and the bare panel model "gemini", which resolves to Flash)
+ * send high when the caller omits it. Every other family omits the field.
+ */
+export function wireReasoningEffort(modelSlug: string | undefined, requested?: string): string | undefined {
+  if (requested) return requested;
+  const s = modelSlug ?? "";
+  if (s === "gemini" || geminiHonorsThinking(s)) return "high";
+  return undefined;
+}
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 export type GeminiTransport = "direct" | "openrouter";
@@ -141,12 +163,11 @@ export async function callGemini(
   }
 
   const resolvedModel = opts.model ?? DEFAULT_GEMINI_MODEL;
-  // Only *-pro slugs support extended thinking; attaching thinkingConfig to a
-  // non-thinking model (e.g. gemini-2.5-flash) returns a 400.
-  const isThinkingModel = /-pro/i.test(resolvedModel);
-  // Gemini thinking is medium/high; map an incoming "low" up to medium.
-  const effort = opts.reasoning_effort === "low" ? "medium" : opts.reasoning_effort ?? "high";
-  const thinkingLevel = ThinkingLevel[effort.toUpperCase() as keyof typeof ThinkingLevel];
+  const isThinkingModel = geminiHonorsThinking(resolvedModel);
+  const effort = wireReasoningEffort(resolvedModel, opts.reasoning_effort);
+  const thinkingLevel = effort
+    ? ThinkingLevel[effort.toUpperCase() as keyof typeof ThinkingLevel]
+    : undefined;
 
   const t0 = Date.now();
   const resp = await ai.models.generateContent({
@@ -154,12 +175,13 @@ export async function callGemini(
     contents: prompt,
     config: {
       ...(opts.system ? { systemInstruction: opts.system } : {}),
-      ...(isThinkingModel ? { thinkingConfig: { thinkingLevel } } : {}),
+      ...(isThinkingModel && thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {}),
       ...(opts.grounded ? { tools: [{ googleSearch: {} }] } : {}),
       ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
       ...(opts.response_schema
         ? { responseMimeType: "application/json", responseSchema: opts.response_schema }
         : {}),
+      serviceTier: ServiceTier.PRIORITY,
     },
   });
   const ms = Date.now() - t0;
@@ -215,7 +237,7 @@ export interface CallOpenRouterOpts {
   models?: string[];
   /** OpenRouter Fusion plugin preset (ask_oracle engine:fusion). */
   fusion_preset?: FusionPreset;
-  /** Force tool invocation — fusion seats pass "required" so OR cannot skip deliberation. */
+  /** Optional. Fusion leaves this unset so the outer model decides whether to deliberate. */
   tool_choice?: "required" | "auto" | "none";
   /** Per-attempt fetch abort (default OR_ATTEMPT_TIMEOUT_MS). Timeouts fail fast → failover. */
   attempt_timeout_ms?: number;
@@ -235,15 +257,9 @@ export interface CallOpenRouterOpts {
  *     gemini slug. `grounded` on a non-gemini slug is a no-op + a loud warning —
  *     OR serves Grok as plain chat, so a grounded grok request would SILENTLY
  *     lose grounding; we surface it instead.
- *   - Reasoning effort (full low|medium|high, default high): attached for gemini
- *     ONLY on -pro. flash/-lite have no extended-thinking mode — OR ACCEPTS a
- *     `reasoning` block on them (HTTP 200) but silently IGNORES it (verified
- *     2026-06-24: flash + flash-lite both 200, no latency change vs none), so we
- *     skip the param rather than send a no-op. (NB: the Google-DIRECT SDK path
- *     above is stricter — `thinkingConfig` on a non-pro model 400s there; that's a
- *     different API, don't conflate them.) Attached for any non-gemini slug (grok +
- *     openrouter/auto-beta both honor it — and x-ai/grok-* DEFAULTS to low via OR, so
- *     passing it explicitly is what keeps a grok seat off its silent low floor).
+ *   - Reasoning effort: Gemini Flash/Pro get high when the caller omits it.
+ *     Flash-Lite, Claude, GPT, Grok, auto, and fusion omit the field unless the
+ *     caller set one. Gemini 2.5 Flash still 400s on thinkingLevel, so it is excluded.
  */
 export async function callOpenRouter(
   apiKey: string | undefined,
@@ -261,16 +277,19 @@ export async function callOpenRouter(
   // "~google/…") is passed through untouched.
   const model = slug.includes("/") ? slug : `google/${slug}`;
   const isGemini = /gemini/i.test(model);
-  // Reasoning gate: gemini only on -pro; everything else (grok, auto) accepts it.
-  const supportsEffort = isGemini ? /-pro/i.test(model) : true;
-  const effort = opts.reasoning_effort ?? "high";
+  // Reasoning gate: Gemini 3 Flash + Pro honor effort. Flash-Lite and 2.5 Flash
+  // do not (see geminiHonorsThinking). Everything else (Claude, GPT, auto) accepts it.
+  const supportsEffort = isGemini ? geminiHonorsThinking(model) : true;
+  const effort = wireReasoningEffort(model, opts.reasoning_effort);
 
   const messages: { role: string; content: string }[] = [];
   if (opts.system) messages.push({ role: "system", content: opts.system });
   messages.push({ role: "user", content: prompt });
 
   const body: Record<string, unknown> = { model, messages };
-  if (supportsEffort) body.reasoning = { effort };
+  if (effort && supportsEffort) body.reasoning = { effort };
+  // Google Priority (their fast tier). OpenRouter forwards service_tier on Gemini only.
+  if (isGemini) body.service_tier = "priority";
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
   if (opts.response_format) body.response_format = opts.response_format;
   if (opts.models?.length) body.models = opts.models;
@@ -359,7 +378,7 @@ export async function callOpenRouter(
  * Thin back-compat alias over callOpenRouter — preserves the exact signature
  * ask_panel and newsDigest already call. Resolves the slug from opts.model the
  * way the old function did (bare slug → google/ namespace; default = the
- * floating gemini-pro alias), then delegates. Do NOT remove: it keeps panel.ts /
+ * floating gemini-flash alias), then delegates. Do NOT remove: it keeps panel.ts /
  * newsDigest.ts untouched through the ask_oracle migration.
  */
 export async function callGeminiViaOpenRouter(

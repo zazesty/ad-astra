@@ -72,7 +72,7 @@ export class ClassifierError extends Error {
 // Flash-lite pin SSOT: modelPins.GEMINI_FLASH_LITE_* (bump VER there only).
 // Hot path: OR primary (same gen) → on *transient* OR fail → direct SDK same gen
 // → prefilter if both die. No older-gen OR models[] cascade (streamlined 2026-08).
-// research_fanout reuses for leg *decomposition* only — limbs are pro/grounded.
+// research_fanout reuses for leg *decomposition* only — limbs are flash/grounded.
 // No `:free` slugs — rate-limited + latency-unstable.
 export const CLASSIFIER_MODEL = GEMINI_FLASH_LITE_OR;
 /** Empty: callOpenRouter only sends `models` when length > 0. Kept for import compat. */

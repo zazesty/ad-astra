@@ -52,6 +52,11 @@ const remapped = applyOpusRemap({ model: "opus" });
 check("opus → sonnet", remapped.model === "sonnet" && remapped.remapped_from === "opus");
 check("opus drops opus slug", applyOpusRemap({ model: "opus", model_slug: "~anthropic/claude-opus-latest" }).model_slug === undefined);
 check(
+  "sonnet + opus slug → sonnet",
+  applyOpusRemap({ model: "sonnet", model_slug: "~anthropic/claude-opus-latest" }).model === "sonnet" &&
+    applyOpusRemap({ model: "sonnet", model_slug: "~anthropic/claude-opus-latest" }).model_slug === undefined,
+);
+check(
   "opus keeps non-opus slug",
   applyOpusRemap({ model: "opus", model_slug: "~anthropic/claude-sonnet-latest" }).model_slug ===
     "~anthropic/claude-sonnet-latest",

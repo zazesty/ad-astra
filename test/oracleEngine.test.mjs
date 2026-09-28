@@ -158,6 +158,18 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(s.every((x) => x.reasoning_effort === "low"), "explicit reasoning_effort overrides classifier (not raised)");
 }
 {
+  const s = buildSlots(C({ reasoning_effort: "high", suggested_panel_n: 3 }), {});
+  const gpt = s.find((x) => /gpt/i.test(x.model_slug));
+  const gem = s.find((x) => /gemini/i.test(x.model_slug));
+  ok(gpt && gpt.reasoning_effort === "medium", "classifier high caps GPT at medium");
+  ok(gem && gem.reasoning_effort === "high", "classifier high still reaches gemini");
+}
+{
+  const s = buildSlots(C({ reasoning_effort: "low", suggested_panel_n: 2 }), {});
+  const gpt = s.find((x) => /gpt/i.test(x.model_slug));
+  ok(gpt && gpt.reasoning_effort === "low", "classifier low is not raised on GPT");
+}
+{
   const s = buildSlots(C(), { force_x: true, force_grounding: true });
   ok(s.some((x) => x.id === "grok-x") && s.some((x) => x.id === "gemini-grounded"), "force_x + force_grounding add both seats");
 }

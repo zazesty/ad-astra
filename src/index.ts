@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -26,8 +28,27 @@ const GEMINI_TRANSPORT = process.env.GEMINI_TRANSPORT === "openrouter" ? "openro
 const XAI_BASE_URL = "https://api.x.ai/v1";
 const PORT = Number(process.env.PORT ?? 3000);
 
+function loadAstraIcon(): { png: Buffer; dataUri: string } | null {
+  try {
+    const png = readFileSync(join(process.cwd(), "assets/astra-icon.png"));
+    return { png, dataUri: `data:image/png;base64,${png.toString("base64")}` };
+  } catch (e) {
+    console.error(`[mcp] astra icon missing: ${(e as Error).message}`);
+    return null;
+  }
+}
+
+const ASTRA_ICON = loadAstraIcon();
+
 function buildServer(budget: BudgetProfile) {
-  const server = new McpServer({ name: "grok-mcp-remote", version: "1.0.0" });
+  const server = new McpServer({
+    name: "grok-mcp-remote",
+    title: "Astra",
+    version: "1.0.0",
+    ...(ASTRA_ICON
+      ? { icons: [{ src: ASTRA_ICON.dataUri, mimeType: "image/png", sizes: ["128x128"] }] }
+      : {}),
+  });
 
   server.registerTool(
     "get_odds",
@@ -134,6 +155,15 @@ function buildServer(budget: BudgetProfile) {
 
 const app = express();
 app.use(express.json());
+
+if (ASTRA_ICON) {
+  const sendIcon = (_req: express.Request, res: express.Response) => {
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.send(ASTRA_ICON.png);
+  };
+  app.get(["/favicon.ico", "/astra-icon.png"], sendIcon);
+}
 
 // Mount path comes from the MCP_PATH env var (set in the off-repo env file),
 // comma-separated for multiple mounts. Never hardcode it here.

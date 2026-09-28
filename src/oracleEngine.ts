@@ -251,15 +251,20 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   // max_effort caps ONLY the classifier's suggestion (spec §3/§7), never an
   // explicit force. (Was: capEffort(ov.reasoning_effort ?? c…, max) — that wrongly
   // capped an explicit force too.)
-  const effort = ov.reasoning_effort ?? capEffort(c.reasoning_effort, ov.max_effort);
+  const explicitEffort = ov.reasoning_effort;
+  const effort = explicitEffort ?? capEffort(c.reasoning_effort, ov.max_effort);
+  // GPT-6 Sol's own default is medium. A classifier "high" was forcing the GPT
+  // seat up and into the chat timeout. Cap it unless the caller set reasoning_effort.
+  const effortFor = (slug: string): Effort =>
+    !explicitEffort && /gpt|openai/i.test(slug) ? capEffort(effort, "medium") : effort;
   const seats: Seat[] = [];
 
   // capability seats — native tools, never routed through `auto`
   if (c.needs_x || ov.force_x) {
-    seats.push({ id: "grok-x", provider: "grok-direct", model_slug: "grok", lens, reasoning_effort: effort, grok_grounding: "required" });
+    seats.push({ id: "grok-x", provider: "grok-direct", model_slug: "grok", lens, reasoning_effort: effortFor("grok"), grok_grounding: "required" });
   }
   if (c.needs_grounding || ov.force_grounding) {
-    seats.push({ id: "gemini-grounded", provider: "openrouter", model_slug: GEMINI_PRO_SLUG, lens, reasoning_effort: effort, grounded: true });
+    seats.push({ id: "gemini-grounded", provider: "openrouter", model_slug: GEMINI_PRO_SLUG, lens, reasoning_effort: effortFor(GEMINI_PRO_SLUG), grounded: true });
   }
   // Fusion engine: one OR Fusion seat replaces the reasoning pool (§6a). Capability
   // seats above are kept; panel_size / exclude_family are ignored on this path.
@@ -269,7 +274,7 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
       provider: "openrouter",
       model_slug: FUSION_MODEL_SLUG,
       lens,
-      reasoning_effort: effort,
+      reasoning_effort: effortFor(FUSION_MODEL_SLUG),
       fusion_preset: ov.fusion_preset ?? DEFAULT_FUSION_PRESET,
     });
     return seats;
@@ -293,7 +298,8 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
       : DEFAULT_REASONING_POOL;
   let i = 0;
   while (seats.length < target) {
-    seats.push(reasoningSeat(pool[i++ % pool.length], seats.length, lens, effort));
+    const slug = pool[i++ % pool.length];
+    seats.push(reasoningSeat(slug, seats.length, lens, effortFor(slug)));
   }
   return seats;
 }
@@ -535,7 +541,7 @@ async function orReasoningWithFailover(
   }
 }
 
-/** OR Fusion seat — no failover, no timeout retry, tool_choice required (§6a). */
+/** OR Fusion seat — no failover, no timeout retry. The model decides whether to call fusion. */
 async function fusionDispatch(
   deps: OracleDeps,
   prompt: string,
@@ -550,7 +556,6 @@ async function fusionDispatch(
     system,
     reasoning_effort: s.reasoning_effort,
     fusion_preset: s.fusion_preset ?? DEFAULT_FUSION_PRESET,
-    tool_choice: "required",
     attempt_timeout_ms: capAttemptMs(
       attemptBudget.startedAt,
       attemptBudget.budgetMs,
@@ -719,7 +724,7 @@ async function synthesize(
     "You are a synthesizer. Merge the labeled model answers below into ONE coherent answer. " +
     "State points of agreement plainly; surface genuine disagreements explicitly rather than averaging them away; " +
     "preserve citations. Do not mention that you are merging multiple sources.";
-  // Judge is PINNED to gemini-pro-latest, not openrouter/auto-beta: synthesis is a
+  // Judge is PINNED to gemini-flash-latest, not openrouter/auto-beta: synthesis is a
   // fixed, well-defined task that wants a strong, predictable reasoner — auto
   // optimizes per-prompt and could route a "merge these" call somewhere weak/
   // unexpected. (NB: deliberately NOT openrouter/fusion — Fusion runs its OWN
@@ -960,7 +965,7 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         "does NOT judge (same output contract as ask_panel); pass synthesize:true for ONE merged verdict. " +
         "SEATS come in two kinds: CAPABILITY seats — live-X (Grok x_search, still available as a " +
         "capability seat via force_x / classifier) and web grounding (Gemini Google Search) — and " +
-        "REASONING seats. Multi-seat REASONING default is Grok-primary: gemini → gpt (Terra) → " +
+        "REASONING seats. Multi-seat REASONING default is Grok-primary: Gemini Flash latest → GPT-6 Sol → " +
         "openrouter/auto-beta (no grok-direct opinion seat, so a Grok caller does not consult itself). " +
         "Pass exclude_family:\"none\" only when you want full cross-family including a grok-direct " +
         "contrarian. The classifier decides how many seats, which capabilities, which lens, and how hard " +
@@ -968,7 +973,7 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         "who decided + why), `slots_status`, a `degraded` flag, and either `raw` labeled answers " +
         "(DEFAULT — YOU synthesize) or a single `answer` when synthesize=true (for headless callers). " +
         "ask_consortium keeps NO model hand-pick knobs by design — describe the question and it picks " +
-        "the panel. To name the exact model per seat (grok|gemini|openai), or set per-member " +
+        "the panel. To name the exact model per seat (grok-4.6|Gemini Flash latest|GPT-6 Sol|Sonnet latest), or set per-member " +
         "grounding/temperature/lens, use ask_panel. Optional overrides (capabilities, effort, lens, " +
         "panel size, exclude_family) supersede the classifier. FUSION (`engine:\"fusion\"`) is deliberate " +
         "ESCALATION only for genuinely contested questions (real tradeoffs, expert disagreement, high " +
@@ -982,7 +987,7 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         synthesize: z
           .boolean()
           .optional()
-          .describe("true → merge the seats into ONE answer (judge = gemini-pro-latest), for headless/automated callers. Default false → return raw labeled answers for you to synthesize. (NOTE: research_fanout's synthesize defaults to the OPPOSITE — true.)"),
+          .describe("true → merge the seats into ONE answer (judge = gemini-flash-latest), for headless/automated callers. Default false → return raw labeled answers for you to synthesize. (NOTE: research_fanout's synthesize defaults to the OPPOSITE — true.)"),
         system: z
           .string()
           .optional()
@@ -1023,7 +1028,7 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         exclude_family: z
           .string()
           .optional()
-          .describe("Reasoning-pool family policy. DEFAULT (omit or \"grok\") is Grok-primary: no grok-direct REASONING seat — multi-seat fill is gemini → gpt (Terra) → openrouter/auto-beta. Pass \"none\" or \"off\" only when the caller is NOT Grok and you want a grok-direct contrarian opinion seat (full cross-family: gemini → grok → gpt → auto). Capability seats (live-X, grounding) are EXEMPT — grok-x is data retrieval, not Grok's opinion. Ignored when engine:\"fusion\"."),
+          .describe("Reasoning-pool family policy. DEFAULT (omit or \"grok\") is Grok-primary: no grok-direct REASONING seat — multi-seat fill is Gemini Flash latest → GPT-6 Sol → openrouter/auto-beta. Pass \"none\" or \"off\" only when the caller is NOT Grok and you want a grok-direct contrarian opinion seat (full cross-family: Gemini Flash latest → grok-4.6 → GPT-6 Sol → auto). Capability seats (live-X, grounding) are EXEMPT — grok-x is data retrieval, not Grok's opinion. Ignored when engine:\"fusion\"."),
         engine: z
           .enum(["fusion"])
           .optional()

@@ -49,7 +49,6 @@ export interface GrokResult {
 const DEFAULT_BASE_URL = "https://api.x.ai/v1";
 /** Single source of truth for direct Grok model pin (index + oracle resolve import this). */
 export const DEFAULT_MODEL = "grok-4.6";
-const DEFAULT_REASONING_EFFORT = "high";
 
 export async function callGrok(
   apiKey: string | undefined,
@@ -82,9 +81,9 @@ async function callGrokParametric(
 
   const body: Record<string, unknown> = {
     model: opts.model,
-    reasoning_effort: opts.reasoning_effort ?? DEFAULT_REASONING_EFFORT,
     messages,
   };
+  if (opts.reasoning_effort) body.reasoning_effort = opts.reasoning_effort;
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
@@ -132,12 +131,9 @@ async function callGrokGrounded(
   // System prompt → top-level `instructions` (verified accepted+honoured on /responses).
   if (opts.system) body.instructions = opts.system;
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
-  // Effort on /responses goes in the NESTED `reasoning.effort` object — the flat
-  // `reasoning_effort` field (what /chat/completions uses) is silently ignored
-  // here (probed 2026-06-14: flat = no change vs baseline; nested ~3.6x'd the
-  // reasoning tokens, no 400). xAI's grounded default is "low"; we override to
-  // DEFAULT_REASONING_EFFORT (high) so live search thinks as hard as the rest.
-  body.reasoning = { effort: opts.reasoning_effort ?? DEFAULT_REASONING_EFFORT };
+  // Effort on /responses goes in the nested `reasoning.effort` object. The flat
+  // `reasoning_effort` field is silently ignored here (probed 2026-06-14).
+  if (opts.reasoning_effort) body.reasoning = { effort: opts.reasoning_effort };
 
   const resp = await fetch(`${baseUrl}/responses`, {
     method: "POST",

@@ -408,7 +408,7 @@ export async function summarize(userPrompt: string, deps: SummarizeDeps): Promis
       const r = await callGrok(
         deps.xaiApiKey,
         userPrompt,
-        { system: COMPRESSION_SYSTEM, grounding: "off", reasoning_effort: "high" },
+        { system: COMPRESSION_SYSTEM, grounding: "off" },
         deps.xaiBaseUrl,
       );
       return { markdown: r.text, engine: "grok:fallback" };

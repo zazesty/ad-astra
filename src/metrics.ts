@@ -2,9 +2,18 @@ import { appendFile, mkdir, readdir, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
+import { wireReasoningEffort } from "./geminiCore.js";
 
 export type MetricsTool = "oracle" | "panel" | "research_fanout";
 
+// Gemini rows in this log through 2026-09-20 are Gemini Pro
+// (~google/gemini-pro-latest, or the panel slug "gemini" which resolved to it).
+// Gemini Flash latest, with priority requested on Google calls, starts 2026-09-27.
+// Do not pool the two eras for latency or reliability.
+//
+// Fast/priority is off for non-Google families (2026-09-27). OpenAI fast and
+// Anthropic fast are about 2×. Turn one on only if that family's normal effort
+// still misses the chat clock.
 export interface SeatMetricRecord {
   ts: string;
   tool: MetricsTool;
@@ -34,6 +43,23 @@ function stateDir(): string {
 function metricsPathForDate(d: Date): string {
   const day = d.toISOString().slice(0, 10);
   return join(stateDir(), `metrics-${day}.jsonl`);
+}
+
+/**
+ * Effort written to the seat log. An explicit level is that level. When the
+ * caller omits it, Gemini Flash/Pro is high because we send high. Grok and
+ * Claude are high, and GPT is medium, because those are the provider defaults
+ * we leave in place by not attaching the field.
+ */
+export function loggedReasoningEffort(modelSlug: string | undefined, requested?: string): string {
+  const wired = wireReasoningEffort(modelSlug, requested);
+  if (wired) return wired;
+  const s = (modelSlug ?? "").toLowerCase();
+  if (s === "grok" || s.includes("grok") || s.includes("claude") || s.includes("anthropic") || s.includes("sonnet")) {
+    return "high";
+  }
+  if (s.includes("gpt") || s.includes("openai")) return "medium";
+  return "unspecified";
 }
 
 export function hashQuestion(prompt: string): string {

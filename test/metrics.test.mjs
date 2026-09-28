@@ -12,6 +12,7 @@ import {
   familyFromSlug,
   classifyError,
   isAttemptTimeoutError,
+  loggedReasoningEffort,
 } from "../build/metrics.js";
 
 let pass = 0;
@@ -29,6 +30,14 @@ function check(name, cond) {
 console.log("Unit: metrics");
 
 check("hashQuestion stable", hashQuestion("hello").length === 16);
+check("omitted flash logs high", loggedReasoningEffort("~google/gemini-flash-latest", undefined) === "high");
+check("omitted bare gemini logs high", loggedReasoningEffort("gemini", undefined) === "high");
+check("omitted sonnet logs high", loggedReasoningEffort("~anthropic/claude-sonnet-latest", undefined) === "high");
+check("omitted sol logs medium", loggedReasoningEffort("openai/gpt-6-sol", undefined) === "medium");
+check("omitted grok logs high", loggedReasoningEffort("grok", undefined) === "high");
+check("lite stays unspecified", loggedReasoningEffort("google/gemini-3.5-flash-lite", undefined) === "unspecified");
+check("explicit medium stays medium", loggedReasoningEffort("grok", "medium") === "medium");
+check("explicit low stays low", loggedReasoningEffort("openai/gpt-6-sol", "low") === "low");
 check("familyFromSlug grok", familyFromSlug("grok", "grok-direct") === "grok");
 check("familyFromSlug gemini", familyFromSlug("~google/gemini-pro-latest") === "gemini");
 check("familyFromSlug fusion", familyFromSlug("openrouter/fusion") === "fusion");

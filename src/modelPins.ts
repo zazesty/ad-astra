@@ -4,8 +4,8 @@
  * Prefer versioned pins over floating aliases unless latency-irrelevant.
  */
 
-/** OpenAI diversity seat — GPT-5.6 Terra (~5.5-competitive, lower cost than sol). */
-export const GPT_OPENROUTER_SLUG = "openai/gpt-5.6-terra";
+/** OpenAI diversity seat — GPT-6 Sol. Blank effort stays at Sol's medium default. */
+export const GPT_OPENROUTER_SLUG = "openai/gpt-6-sol";
 
 /**
  * OpenRouter Auto Router seat (overflow / n=1 default).
@@ -16,12 +16,11 @@ export const GPT_OPENROUTER_SLUG = "openai/gpt-5.6-terra";
 export const OPENROUTER_AUTO_SLUG = "openrouter/auto-beta";
 
 /**
- * ask_panel Claude seats via OpenRouter (Anthropic).
- * Enum still has `opus` (Grok chat cache) but panel remaps model:opus → sonnet
- * — CLAUDE_OPUS_OPENROUTER_SLUG is not a live panel path. Schema cull later
- * needs MCP_PATH rotation. Floating `~…-latest` aliases track the current gen
- * (verified 2026-08: resolve to opus-5 / sonnet-5). Versioned pins if an alias
- * ever 404s: anthropic/claude-opus-5 · anthropic/claude-sonnet-5.
+ * ask_panel Claude seat via OpenRouter (Anthropic): sonnet only.
+ * `model:"opus"` and an opus model_slug still remap to sonnet (callers that
+ * cached the old enum). The public schema no longer lists opus. Floating
+ * `~…-latest` aliases track the current gen (verified 2026-08: sonnet-5).
+ * Versioned pin if the alias 404s: anthropic/claude-sonnet-5.
  */
 export const CLAUDE_OPUS_OPENROUTER_SLUG = "~anthropic/claude-opus-latest";
 export const CLAUDE_SONNET_OPENROUTER_SLUG = "~anthropic/claude-sonnet-latest";
@@ -30,8 +29,8 @@ export const CLAUDE_SONNET_OPENROUTER_SLUG = "~anthropic/claude-sonnet-latest";
  * Gemini flash-lite generation (classifier + research_fanout *decompose* only —
  * evidence limbs are pro/grounded, not flash-lite).
  *
- * **No** `gemini-flash-lite-latest` / `~google/gemini-flash-lite-latest` exists on
- * OpenRouter or AI Studio (re-checked 2026-08). Only versioned pins work.
+ * OpenRouter has no `gemini-flash-lite-latest` alias (the classifier calls OR first).
+ * AI Studio does have `gemini-flash-lite-latest`. The pin stays versioned.
  *
  * **Upgrade recipe:** change `GEMINI_FLASH_LITE_VER` only (e.g. `"3.6-flash-lite"`).
  * OR + direct slugs derive from it. Failover is transport-level (OR → AI Studio
