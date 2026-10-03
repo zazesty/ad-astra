@@ -17,7 +17,6 @@
  * same fail-loud zero-citation retry contract ask_panel uses.
  */
 
-import { z } from "zod";
 import { callGrok, DEFAULT_MODEL, type Grounding } from "./grokCore.js";
 import {
   callOpenRouter,
@@ -27,7 +26,7 @@ import {
   DEFAULT_OPENROUTER_GEMINI_MODEL,
   type FusionPreset,
 } from "./geminiCore.js";
-import { applyLens, buildLensMenu } from "./lenses.js";
+import { applyLens } from "./lenses.js";
 import {
   classify,
   prefilter,
@@ -44,7 +43,7 @@ import {
   type SeatMetricRecord,
 } from "./metrics.js";
 import { canStartAttempt, capAttemptMs, MIN_NEXT_ATTEMPT_MS, remainingMs, withTimeout } from "./timeouts.js";
-import { GPT_OPENROUTER_SLUG, OPENROUTER_AUTO_SLUG } from "./modelPins.js";
+import { CLAUDE_SONNET_OPENROUTER_SLUG, GPT_OPENROUTER_SLUG, OPENROUTER_AUTO_SLUG } from "./modelPins.js";
 import { CLI_BUDGET, type BudgetProfile } from "./budgetProfile.js";
 
 export type { Effort, FusionPreset };
@@ -71,7 +70,8 @@ function oracleBudget(deps: OracleDeps): BudgetProfile {
 // Overrides (§7). `specs` (the deterministic ask_panel bypass) is handled one
 // layer up at tool registration — it never reaches the engine.
 export interface OracleOverrides {
-  n?: number;               // force seat count (still floored by capability seats)
+  n?: number;               // internal exact seat count (tests). Schema uses min_perspectives.
+  min_perspectives?: number; // floor. Classifier may seat more. Capability seats still count.
   lens?: string;            // force lens
   system?: string;          // system instruction applied to every seat (composes w/ lens)
   reasoning_effort?: Effort; // force effort — WINS over max_effort
@@ -197,21 +197,39 @@ function panelFillPool(existing: Seat[]): string[] {
  * Grok is the usual caller and must not consult itself. Cross-family dissent only:
  *
  *   1 seat (with exclude_family:"grok" legacy) → gemini
- *   multi-seat default → gemini · gpt · auto · cycle (never grok opinion)
+ *   multi-seat default → gemini · gpt · sonnet · auto-beta, then that same
+ *   four repeats for seat 5 on. Never a grok opinion seat.
  *
- * OPENROUTER_AUTO_SLUG is overflow (family-agnostic). Capability seats stay in
- * `buildSlots` before this runs — grok-x is live-X data, not Grok's opinion.
- * Families already seated are deduped from head.
- * Alias: historical name grokCallerPool; exclude_family:"grok" is a no-op synonym.
+ * The returned array is one rotation of that four, so `i % length` repeats
+ * it forever. A family already seated (a grounded Gemini capability seat)
+ * is skipped only at the start of the first cycle. Capability seats stay
+ * in `buildSlots` before this runs — grok-x is live-X data, not Grok's opinion.
+ * exclude_family is not on the schema. "grok" remains a legacy synonym for
+ * this pool; "none"/"off" still reaches panelFillPool for tests.
  */
+const CALLER_PATTERN = [
+  GEMINI_PRO_SLUG,
+  GPT_SLUG,
+  CLAUDE_SONNET_OPENROUTER_SLUG,
+  OPENROUTER_AUTO_SLUG,
+];
+
+function familyAlreadySeated(existing: Seat[], slug: string): boolean {
+  if (isAutoSlug(slug)) return existing.some((s) => isAutoSlug(s.model_slug));
+  if (/gpt/i.test(slug)) return existing.some((s) => /gpt/i.test(s.model_slug));
+  if (/claude|sonnet|anthropic/i.test(slug)) {
+    return existing.some((s) => /claude|sonnet|anthropic/i.test(s.model_slug));
+  }
+  if (/gemini/i.test(slug)) {
+    return existing.some((s) => s.provider === "openrouter" && /gemini/i.test(s.model_slug));
+  }
+  return false;
+}
+
 function defaultCallerPool(existing: Seat[]): string[] {
-  const haveGemini = existing.some((s) => s.provider === "openrouter" && /gemini/i.test(s.model_slug));
-  const haveGpt = existing.some((s) => /gpt/i.test(s.model_slug));
-  const head: string[] = [];
-  if (!haveGemini) head.push(GEMINI_PRO_SLUG);
-  if (!haveGpt) head.push(GPT_SLUG);
-  // Tail cycles real models then auto as overflow — NEVER grok.
-  return [...head, OPENROUTER_AUTO_SLUG, GEMINI_PRO_SLUG, GPT_SLUG];
+  const start = CALLER_PATTERN.findIndex((slug) => !familyAlreadySeated(existing, slug));
+  const origin = start === -1 ? 0 : start;
+  return CALLER_PATTERN.slice(origin).concat(CALLER_PATTERN.slice(0, origin));
 }
 /** @deprecated alias — same as defaultCallerPool (Grok-primary default). */
 const grokCallerPool = defaultCallerPool;
@@ -227,12 +245,16 @@ function isGrokSlug(slug: string): boolean {
   return !isAutoSlug(slug) && /grok/i.test(slug);
 }
 
-function reasoningSeat(slug: string, idx: number, lens: string, effort: Effort): Seat {
+function reasoningSeat(slug: string, idx: number, lens: string, effort: Effort, autoOrdinal = 0): Seat {
   if (isGrokSlug(slug)) {
     return { id: `reason-${idx}`, provider: "grok-direct", model_slug: slug, lens, reasoning_effort: effort };
   }
+  // The 4-cycle seats auto again at seat 8, 12, …. The first keeps the id
+  // "auto" (n=1 and the 4th seat). Later copies get auto-2, auto-3, so
+  // slots_status and the judge don't collapse two answers into one label.
+  const id = isAutoSlug(slug) ? (autoOrdinal === 0 ? "auto" : `auto-${autoOrdinal + 1}`) : `reason-${idx}`;
   return {
-    id: isAutoSlug(slug) ? "auto" : `reason-${idx}`,
+    id,
     provider: "openrouter",
     model_slug: slug,
     lens,
@@ -253,10 +275,11 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   // capped an explicit force too.)
   const explicitEffort = ov.reasoning_effort;
   const effort = explicitEffort ?? capEffort(c.reasoning_effort, ov.max_effort);
-  // GPT Sol latest's own default is medium. A classifier "high" was forcing the GPT
-  // seat up and into the chat timeout. Cap it unless the caller set reasoning_effort.
+  // Sol's own default is medium, and Sonnet is sent medium. A classifier "high"
+  // was forcing those seats up and into the chat timeout. Cap both unless the
+  // caller set reasoning_effort.
   const effortFor = (slug: string): Effort =>
-    !explicitEffort && /gpt|openai/i.test(slug) ? capEffort(effort, "medium") : effort;
+    !explicitEffort && /gpt|openai|sonnet|claude|anthropic/i.test(slug) ? capEffort(effort, "medium") : effort;
   const seats: Seat[] = [];
 
   // capability seats — native tools, never routed through `auto`
@@ -279,14 +302,19 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
     });
     return seats;
   }
-  // seat count = max(requested, #capability seats, 1) — capabilities win
-  const want = ov.n ?? c.suggested_panel_n ?? 1;
+  // Seat count: an internal exact `n` wins. Otherwise the floor is the
+  // greater of the classifier's pick and min_perspectives. Capability seats
+  // already pushed are never dropped.
+  const classifierN = c.suggested_panel_n ?? 1;
+  const floor = Math.max(classifierN, ov.min_perspectives ?? 1);
+  const want = ov.n ?? floor;
   const target = Math.max(want, seats.length, 1);
   // Reasoning-pool fill — purely AUTO, no hand-pick (naming exact models is
-  // ask_panel's job). Grok-primary DEFAULT (2026-08): multi-seat → gemini/gpt/auto
-  // with no grok-direct opinion seat. exclude_family:"grok" = legacy synonym for
-  // default (also forces gemini at n=1). exclude_family:"none"|"off" restores full
-  // cross-family including grok-direct (for non-Grok callers e.g. claude.ai).
+  // ask_panel's job). Grok-primary DEFAULT: multi-seat → gemini, Sol, Sonnet,
+  // auto-beta as the 4th. No grok-direct opinion seat. exclude_family is not a
+  // caller knob. "grok" remains a legacy synonym for this pool (also forces
+  // gemini at n=1). "none"/"off" restores full cross-family including
+  // grok-direct, for tests only.
   // n=1 without that flag keeps cheap openrouter/auto-beta.
   const fullCrossFamily = ov.exclude_family === "none" || ov.exclude_family === "off";
   const pool = fullCrossFamily
@@ -297,9 +325,11 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
       ? defaultCallerPool(seats)
       : DEFAULT_REASONING_POOL;
   let i = 0;
+  let autoOrdinal = 0;
   while (seats.length < target) {
     const slug = pool[i++ % pool.length];
-    seats.push(reasoningSeat(slug, seats.length, lens, effortFor(slug)));
+    const ordinal = isAutoSlug(slug) ? autoOrdinal++ : 0;
+    seats.push(reasoningSeat(slug, seats.length, lens, effortFor(slug), ordinal));
   }
   return seats;
 }
@@ -716,6 +746,7 @@ async function synthesize(
   route: RoutePlan,
   oks: SlotResult[],
   oracleT0?: number,
+  outerMs?: number,
 ): Promise<string> {
   const blocks = oks
     .map((r) => `## ${r.seat.id}\n${r.text}${r.citations?.length ? `\n\nSources:\n${r.citations.join("\n")}` : ""}`)
@@ -735,8 +766,9 @@ async function synthesize(
   // than hard-error. GEMINI_PRO_SLUG is gemini → fails over to direct-gemini.
   const profile = oracleBudget(deps);
   const t0 = Date.now();
+  const outer = outerMs ?? profile.oracleOuterMs;
   const budgetMs = oracleT0
-    ? Math.min(profile.oracleSlotMs, remainingMs(oracleT0, profile.oracleOuterMs))
+    ? Math.min(profile.oracleSlotMs, remainingMs(oracleT0, outer))
     : profile.oracleSlotMs;
   if (budgetMs < MIN_NEXT_ATTEMPT_MS) {
     throw new Error("synthesize skipped, outer budget exhausted");
@@ -746,6 +778,39 @@ async function synthesize(
     reasoning_effort: route.reasoning_effort,
   }, { startedAt: t0, budgetMs });
   return r.text;
+}
+
+/** Judge a hand-picked panel the same way the auto path does. */
+export async function judgeLabeledAnswers(
+  deps: OracleDeps,
+  parts: { id: string; text: string; citations?: string[] }[],
+  clock?: { startedAt: number; outerMs: number },
+): Promise<string> {
+  const oks: SlotResult[] = parts.map((p) => ({
+    seat: {
+      id: p.id,
+      provider: "openrouter",
+      model_slug: GEMINI_PRO_SLUG,
+      lens: "default",
+      reasoning_effort: "medium",
+    },
+    status: "ok",
+    text: p.text,
+    citations: p.citations ?? [],
+  }));
+  const route: RoutePlan = {
+    mode: "panel",
+    models: [],
+    lens: "default",
+    reasoning_effort: "medium",
+    used_x_search: false,
+    used_grounding: false,
+    panel_n: parts.length,
+    source: "override",
+    classifier_model: null,
+    rationale: "panel synthesize",
+  };
+  return synthesize(deps, route, oks, clock?.startedAt, clock?.outerMs);
 }
 
 export async function assemble(
@@ -928,150 +993,4 @@ export async function runOracle(
   return assemble(deps, route, results, ov, !!classifierError, oracleT0);
 }
 
-// ── MCP tool registration (step 4) ────────────────────────────────────────────
-export type OracleRegisterOpts = {
-  xaiApiKey?: string;
-  geminiApiKey?: string;
-  openrouterApiKey?: string;
-  xaiBaseUrl?: string;
-  budget?: BudgetProfile;
-};
-
-/**
- * Registers `ask_consortium` (formerly ask_oracle) — the auto-routing front door.
- * The caller passes just a prompt; the classifier decides panel size / capabilities /
- * lens / effort, the seats fan out concurrently, and the response carries a legible
- * `route` object plus raw labeled answers (default) or a synthesized answer.
- * Forceful overrides supersede the classifier when the caller has intent.
- *
- * Ships BESIDE ask_panel. Internal metrics still use tool:"oracle".
- */
-export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
-  const deps: OracleDeps = {
-    xaiApiKey: opts.xaiApiKey,
-    geminiApiKey: opts.geminiApiKey,
-    openrouterApiKey: opts.openrouterApiKey,
-    xaiBaseUrl: opts.xaiBaseUrl,
-    budget: opts.budget,
-  };
-
-  server.registerTool(
-    "ask_consortium",
-    {
-      title: "Ask Consortium (auto-routed)",
-      description:
-        "Auto-routing multi-model consortium. Give it a prompt; it classifies the question and " +
-        "routes a panel for you. DEFAULT returns RAW labeled seats for YOU to synthesize — it gathers, it " +
-        "does NOT judge (same output contract as ask_panel); pass synthesize:true for ONE merged verdict. " +
-        "SEATS come in two kinds: CAPABILITY seats — live-X (Grok x_search, still available as a " +
-        "capability seat via force_x / classifier) and web grounding (Gemini Google Search) — and " +
-        "REASONING seats. Multi-seat REASONING default is Grok-primary: Gemini Flash latest → GPT Sol latest → " +
-        "openrouter/auto-beta (no grok-direct opinion seat, so a Grok caller does not consult itself). " +
-        "Pass exclude_family:\"none\" only when you want full cross-family including a grok-direct " +
-        "contrarian. The classifier decides how many seats, which capabilities, which lens, and how hard " +
-        "to think. Returns a legible `route` object (which models ran, lens/effort, capabilities fired, " +
-        "who decided + why), `slots_status`, a `degraded` flag, and either `raw` labeled answers " +
-        "(DEFAULT — YOU synthesize) or a single `answer` when synthesize=true (for headless callers). " +
-        "ask_consortium keeps NO model hand-pick knobs by design — describe the question and it picks " +
-        "the panel. To name the exact model per seat (grok-4.6|Gemini Flash latest|GPT Sol latest|Sonnet latest), or set per-member " +
-        "grounding or lens, use ask_panel. Optional overrides (capabilities, lens, " +
-        "panel size, exclude_family) supersede the classifier. Effort is not a caller knob. FUSION (`engine:\"fusion\"`) is deliberate " +
-        "ESCALATION only for genuinely contested questions (real tradeoffs, expert disagreement, high " +
-        "cost of being wrong) — not tactical/factual prompts; OR internal multi-model panel+judge " +
-        "(~40–120s, multi-seat cost).",
-      inputSchema: {
-        prompt: z
-          .string()
-          .refine((s) => s.trim().length > 0, { message: "prompt must not be empty or whitespace-only" })
-          .describe("The question to route and answer (raw labeled seats by default; synthesize:true for one merged verdict)."),
-        synthesize: z
-          .boolean()
-          .optional()
-          .describe("true → merge the seats into ONE answer (judge = gemini-flash-latest), for headless/automated callers. Default false → return raw labeled answers for you to synthesize. (NOTE: research_fanout's synthesize defaults to the OPPOSITE — true.)"),
-        system: z
-          .string()
-          .optional()
-          .describe("System instruction applied to EVERY seat — persona, tone, output format, constraints. Composes with the lens: lens body first, then your text."),
-        panel_size: z
-          .number()
-          .int()
-          .min(1)
-          .max(8)
-          .optional()
-          .describe("Force the total number of seats. Still floored by required capability seats: live-X / grounding are never dropped to honor a smaller size."),
-        lens: z
-          .string()
-          .optional()
-          .describe(
-            "Analytical frame applied to every seat via the system prompt. By DEFAULT the classifier picks " +
-              "a frame for the question (usually 'default', a neutral second-opinion frame); set this to OVERRIDE " +
-              "its pick, 'none' to disable framing, or choose one: " +
-              buildLensMenu() +
-              ". Composes with `system`: lens body first, then your `system` text.",
-          ),
-        force_x: z
-          .boolean()
-          .optional()
-          .describe("Add a live-X seat (Grok x_search) with required-grounding: it ERRORS rather than return a sourceless answer if X yields nothing."),
-        force_grounding: z
-          .boolean()
-          .optional()
-          .describe("Add a web-grounded Gemini seat — live Google Search (Gemini-native, routed via OpenRouter) — with required-grounding: it ERRORS rather than return a sourceless answer if no citations come back."),
-        exclude_family: z
-          .string()
-          .optional()
-          .describe("Reasoning-pool family policy. DEFAULT (omit or \"grok\") is Grok-primary: no grok-direct REASONING seat — multi-seat fill is Gemini Flash latest → GPT Sol latest → openrouter/auto-beta. Pass \"none\" or \"off\" only when the caller is NOT Grok and you want a grok-direct contrarian opinion seat (full cross-family: Gemini Flash latest → grok-4.6 → GPT Sol latest → auto). Capability seats (live-X, grounding) are EXEMPT — grok-x is data retrieval, not Grok's opinion. Ignored when engine:\"fusion\"."),
-        engine: z
-          .enum(["fusion"])
-          .optional()
-          .describe(
-            "Opt-in ESCALATION only — NOT the default path. Set \"fusion\" ONLY for genuinely CONTESTED " +
-              "questions: real tradeoffs, credible expert disagreement, or where being wrong is expensive " +
-              "(policy, strategy, ambiguous evidence). Skip for tactical lookups, simple facts, or prompts " +
-              "a normal panel answers cleanly. Runs OpenRouter Fusion as one seat REPLACING the reasoning pool " +
-              "(internal multi-model panel + judge, then final answer) — ~40–120s, multi-seat cost. " +
-              "Capability seats (force_x, force_grounding, classifier-flagged) still run first.",
-          ),
-        fusion_preset: z
-          .enum(["general-budget", "general-high", "general-fast"])
-          .optional()
-          .describe(
-            "Fusion tier when engine:\"fusion\". OR picks the panel models + judge per preset (we do not " +
-              "hand-pick). general-budget (default) = cheaper panel, frontier judge; general-high = strongest " +
-              "panel; general-fast = latency-homogeneous panel. route.models[] shows the literal \"openrouter/fusion\" " +
-              "seat; the resolved outer answer-writer (e.g. claude-opus on general-fast) is OR-internal and logged " +
-              "server-side, not surfaced in the route. Ignored unless engine is set.",
-          ),
-      },
-    },
-    async (args: {
-      prompt: string;
-      synthesize?: boolean;
-      system?: string;
-      panel_size?: number;
-      lens?: string;
-      force_x?: boolean;
-      force_grounding?: boolean;
-      exclude_family?: string;
-      engine?: "fusion";
-      fusion_preset?: FusionPreset;
-    }) => {
-      try {
-        const result = await runOracle(deps, args.prompt, {
-          synthesize: args.synthesize,
-          system: args.system,
-          n: args.panel_size,
-          lens: args.lens,
-          force_x: args.force_x,
-          force_grounding: args.force_grounding,
-          exclude_family: args.exclude_family,
-          engine: args.engine,
-          fusion_preset: args.fusion_preset,
-        });
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      } catch (err) {
-        return { content: [{ type: "text", text: `ask_consortium failed: ${(err as Error).message}` }], isError: true };
-      }
-    },
-  );
-}
+// ask_consortium's MCP registration moved onto ask_panel (2026-10-03).

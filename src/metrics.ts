@@ -10,8 +10,9 @@ export type MetricsTool = "oracle" | "panel" | "research_fanout";
 // (~google/gemini-pro-latest, or the panel slug "gemini" which resolved to it).
 // Gemini Flash latest, with priority requested on Google calls, starts 2026-09-27.
 // Do not pool the two eras for latency or reliability.
-// Provider fast tiers (OpenAI service_tier fast/priority, Anthropic speed:fast,
-// xAI priority) are scrubbed (2026-10-03). Do not add them back.
+// Sol fast is on (2026-10-03 reopen): OpenAI Sol slugs send service_tier "fast"
+// from callOpenRouter. Anthropic speed:fast and xAI priority stay scrubbed.
+// Gemini keeps service_tier "priority". Do not add the scrubbed tiers back.
 export interface SeatMetricRecord {
   ts: string;
   tool: MetricsTool;

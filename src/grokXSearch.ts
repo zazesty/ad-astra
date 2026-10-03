@@ -3,7 +3,7 @@
  *
  * Live-X remains available via:
  *   - ask_panel: model:"grok" + grounded:true (auto contract)
- *   - ask_consortium: force_x / classifier-flagged X capability seat (required contract)
+ *   - ask_panel auto path (specs omitted): classifier-flagged X capability seat. force_x is not a caller knob.
  *   - research_fanout: force_x_leg
  *
  * Implementation lives in grokCore.ts (`callGrok` + applyGroundingContract).

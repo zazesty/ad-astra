@@ -10,7 +10,6 @@ export const MCP_TOOLS = [
   "get_odds",
   "ask_panel",
   "get_news_digest",
-  "ask_consortium",
   "memory_search",
   "memory_retrieve",
   "memory_upsert",

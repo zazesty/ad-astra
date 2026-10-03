@@ -7,7 +7,7 @@ import { z } from "zod";
 import { getOdds } from "./oddsTool.js";
 import { registerAskPanel } from "./panel.js";
 import { registerNewsDigest } from "./newsDigest.js";
-import { registerAskOracle } from "./oracleEngine.js";
+
 import { registerMemoryTools, loadMemoryIndexRaw } from "./memory.js";
 import { loadLensesRaw } from "./lenses.js";
 import { registerGetMetrics } from "./metrics.js";
@@ -97,16 +97,6 @@ function buildServer(budget: BudgetProfile) {
     xaiBaseUrl: XAI_BASE_URL,
   });
 
-  // Auto-routing consortium (classify → route → fan out → assemble). Tool name:
-  // ask_consortium. Ships beside ask_panel; reuses Grok-direct + OpenRouter cores.
-  registerAskOracle(server, {
-    xaiApiKey: XAI_API_KEY,
-    geminiApiKey: GEMINI_API_KEY,
-    openrouterApiKey: OPENROUTER_API_KEY,
-    xaiBaseUrl: XAI_BASE_URL,
-    budget,
-  });
-
   // Shared file-backed memory KB (/root/memory). Four tools: search / retrieve /
   // upsert / list. MCP is the single read/write authority.
   registerMemoryTools(server);
@@ -172,7 +162,7 @@ const MCP_PATHS = (process.env.MCP_PATH ?? "/mcp")
   .map((p) => p.trim())
   .filter(Boolean);
 
-const SLOW_TOOLS = new Set(["ask_panel", "ask_consortium", "research_fanout", "get_news_digest"]);
+const SLOW_TOOLS = new Set(["ask_panel", "research_fanout", "get_news_digest"]);
 
 // Stateless: a fresh server + transport per request. Simple and fine for a single-tool personal server.
 app.post(MCP_PATHS, async (req, res) => {

@@ -2,7 +2,7 @@
  * Unit tests for callOpenRouter timeout/abort vs retry behavior.
  * Run AFTER `npm run build`. Mocks global fetch — no network billed.
  */
-import { callOpenRouter, OpenRouterError, isTransientError } from "../build/geminiCore.js";
+import { callOpenRouter, OpenRouterError, isTransientError, isOpenAiSolSlug } from "../build/geminiCore.js";
 
 let pass = 0;
 let fail = 0;
@@ -36,6 +36,9 @@ function hangingFetch() {
 
 async function run() {
   console.log("Unit: callOpenRouter timeout + retry");
+  // AbortSignal.timeout() is unref'd, so the hang case would otherwise let
+  // this process exit 0 before any assertion. Cleared before we exit.
+  const keepAlive = setInterval(() => {}, 1000);
 
   // 1. Hang → single attempt, transient OpenRouterError, no retry loop.
   {
@@ -99,6 +102,45 @@ async function run() {
     check("503 then ok: 2 attempts", attempts === 2);
   }
 
+  // 4. Service tier: Sol fast, Gemini priority, everyone else unset.
+  {
+    async function tierFor(slug) {
+      let body;
+      globalThis.fetch = async (_url, init) => {
+        body = JSON.parse(init.body);
+        return new Response(JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      };
+      await callOpenRouter("sk-test", slug, "hi", { attempt_timeout_ms: 5000 });
+      globalThis.fetch = realFetch;
+      return body;
+    }
+    const solSlugs = [
+      "~openai/gpt-sol-latest",
+      "openai/gpt-6.1-sol",
+      "openai/gpt-6-sol",
+      "openai/gpt-6.1-sol-pro",
+      "openai/gpt-5.6-sol",
+    ];
+    for (const slug of solSlugs) {
+      const body = await tierFor(slug);
+      check(`sol tier fast: ${slug}`, body.service_tier === "fast" && body.provider === undefined);
+      check(`sol detector: ${slug}`, isOpenAiSolSlug(slug));
+    }
+    const gemini = await tierFor("~google/gemini-flash-latest");
+    check("gemini tier stays priority", gemini.service_tier === "priority");
+    const bareGemini = await tierFor("gemini-2.5-flash");
+    check("bare gemini tier stays priority", bareGemini.service_tier === "priority" && bareGemini.model === "google/gemini-2.5-flash");
+    for (const slug of ["openai/gpt-6-luna", "openrouter/auto-beta", "~anthropic/claude-sonnet-latest", "x-ai/grok-4.6"]) {
+      const body = await tierFor(slug);
+      check(`no fast tier: ${slug}`, body.service_tier === undefined);
+      check(`not a sol slug: ${slug}`, isOpenAiSolSlug(slug) === false);
+    }
+    check("luna word is not sol", isOpenAiSolSlug("openai/gpt-6.1-solution") === false);
+  }
+
+  clearInterval(keepAlive);
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 }

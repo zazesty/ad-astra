@@ -403,7 +403,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
         "(1) pure or hot breaking-X sentiment → ask_panel model:grok grounded:true " +
         "(lighter than force_x_leg through fanout — X legs under load can timeout the whole call); " +
         "(2) strategy/opinion/tradeoff adjudication (\"Should we adopt trunk-based dev?\") → " +
-        "ask_consortium or ask_panel; " +
+        "ask_panel with specs left empty; " +
         "(3) extreme vagueness (\"Tell me about AI\") → re-scope first or expect " +
         "timeout/shallow routing; " +
         "(4) trivial textbook constants (\"boiling point of water\") → may " +
@@ -424,7 +424,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
               "(labor, supply chain, AI/CAM, aerospace/medtech).\" " +
               "Good: \"Current US federal funds rate target range; cite official sources.\" " +
               "Bad/vague: \"Tell me about AI.\" " +
-              "Use ask_consortium instead: \"Should we adopt trunk-based development?\" " +
+              "Use ask_panel with specs left empty: \"Should we adopt trunk-based development?\" " +
               "Use ask_panel grok+grounded for pure last-24h X reaction.",
           ),
         synthesize: z
@@ -434,7 +434,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
             "true (default) = one coherent answer + citation union; " +
               "false = raw legs only (inspect/decompose further yourself). " +
               "false is excellent for multi-hop dumps you will merge offline. " +
-              "(NOTE: ask_consortium's synthesize defaults to the OPPOSITE — false.)",
+              "(NOTE: ask_panel's synthesize defaults to the OPPOSITE — false.)",
           ),
         max_legs: z
           .number()

@@ -118,20 +118,30 @@ const isError = (r) => r.error != null || r.result?.isError === true;
 
 // 7. ask_panel empty specs -> validation error (no billed call)
 {
-  const r = await callTool("ask_panel", { specs: [] });
+  const r = await callTool("ask_panel", { prompt: "horses", specs: [] });
   check("ask_panel empty specs -> error", isError(r));
 }
 
 // 8. ask_panel spec with empty prompt -> validation error (no billed call)
 {
-  const r = await callTool("ask_panel", { specs: [{ model: "grok", prompt: "" }] });
+  const r = await callTool("ask_panel", { prompt: "horses", specs: [{ model: "grok", prompt: "" }] });
   check("ask_panel empty prompt -> error", isError(r));
 }
 
-// 9. ask_consortium empty prompt -> validation error (no billed call)
+// 9. ask_panel empty top-level prompt -> validation error (no billed call)
 {
-  const r = await callTool("ask_consortium", { prompt: "" });
-  check("ask_consortium empty prompt -> error", isError(r));
+  const r = await callTool("ask_panel", { prompt: "" });
+  check("ask_panel empty prompt -> error", isError(r));
+}
+
+// 10. named specs plus an auto-fill knob fails the call (no billed call)
+{
+  const r = await callTool("ask_panel", {
+    prompt: "horses",
+    specs: [{ model: "gemini" }],
+    min_perspectives: 3,
+  });
+  check("ask_panel specs + min_perspectives -> error", isError(r));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

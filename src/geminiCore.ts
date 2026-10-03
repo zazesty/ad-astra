@@ -61,6 +61,16 @@ export function wireReasoningEffort(modelSlug: string | undefined, requested?: s
   if (/sonnet|claude/i.test(s)) return "medium";
   return undefined;
 }
+
+/**
+ * OpenAI Sol family only (floating alias and dated Sol ids, including -pro).
+ * Luna, auto, fusion, Sonnet, and Grok do not match. Used to attach
+ * OpenRouter service_tier "fast" — a preference, not a different model id.
+ */
+export function isOpenAiSolSlug(model: string): boolean {
+  const s = model.toLowerCase();
+  return /(?:^|[\/~])gpt-(?:[\d.]+-)?sol(?:-|$)/.test(s) || /gpt-sol(?:-|$)/.test(s);
+}
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 export type GeminiTransport = "direct" | "openrouter";
@@ -265,6 +275,10 @@ export interface CallOpenRouterOpts {
  *     Sonnet is sent medium. GPT, Grok, auto, and fusion omit the field
  *     (Sol's own default is medium; Grok's own default is high).
  *     Gemini 2.5 Flash still 400s on thinkingLevel, so it is excluded.
+ *   - Service tier: Gemini sends "priority". Sol-family slugs send "fast"
+ *     (same OpenRouter preference: priority endpoints first, then default,
+ *     billed as served). Anthropic speed and xAI priority stay off.
+ *     Do not pin provider.only — that removes the fallback.
  */
 export async function callOpenRouter(
   apiKey: string | undefined,
@@ -293,8 +307,11 @@ export async function callOpenRouter(
 
   const body: Record<string, unknown> = { model, messages };
   if (effort && supportsEffort) body.reasoning = { effort };
-  // Google Priority lane, Gemini only. OpenRouter forwards service_tier for it.
+  // Preference only. Gemini keeps Google priority. Sol family sends OpenAI fast
+  // (falls back to default and is billed as served). No provider.only pin.
   if (isGemini) body.service_tier = "priority";
+  else if (isOpenAiSolSlug(model)) body.service_tier = "fast";
+  const serviceTier = typeof body.service_tier === "string" ? body.service_tier : "default";
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
   if (opts.response_format) body.response_format = opts.response_format;
   if (opts.models?.length) body.models = opts.models;
@@ -372,7 +389,8 @@ export async function callOpenRouter(
     // signal the fail-loud contract keys off. journald only.
     console.error(
       `[callOpenRouter] requested=${model} resolved=${data?.model ?? "?"} ` +
-        `grounded=${!!(opts.grounded && isGemini)} effort=${supportsEffort ? effort : "n/a"} ms=${ms} ` +
+        `grounded=${!!(opts.grounded && isGemini)} effort=${supportsEffort ? effort : "n/a"} ` +
+        `tier=${serviceTier} ms=${ms} ` +
         `attempt=${attempt} finish=${data?.choices?.[0]?.finish_reason ?? "?"} citations=${result.citations.length}`,
     );
     return result;

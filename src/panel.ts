@@ -1,8 +1,7 @@
 /**
  * panel.ts — the `ask_panel` tool: the single entry point for asking any
- * model(s). Fires an array of query specs CONCURRENTLY and returns raw, labeled
- * responses in input order for the in-chat caller to synthesize. The win is
- * wall-clock: total latency is the slowest single spec, not the sum.
+ * model(s). Named specs run CONCURRENTLY and return raw, labeled responses.
+ * Omit specs and the same tool auto-fills families (the old ask_consortium).
  *
  * A 1-element spec array is the single-query path (this tool replaced the old
  * standalone ask_grok / ask_gemini). Live-X is model:grok + grounded:true
@@ -25,7 +24,8 @@ import {
   type GeminiClient,
   type GeminiTransport,
 } from "./geminiCore.js";
-import { applyLens, buildLensParamDescription } from "./lenses.js";
+import { applyLens, buildLensMenu, buildLensParamDescription } from "./lenses.js";
+import { judgeLabeledAnswers, runOracle, type FusionPreset } from "./oracleEngine.js";
 import {
   classifyError,
   familyFromSlug,
@@ -141,7 +141,8 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     prompt: z
       .string()
       .refine((s) => s.trim().length > 0, { message: "prompt must not be empty or whitespace-only" })
-      .describe("The question/prompt for this model. For grounded specs, state the current date and ask for sources."),
+      .optional()
+      .describe("Overrides the shared prompt for this seat only. Omit to use the top-level prompt. For grounded specs that override it, state the current date and ask for sources."),
     label: z
       .string()
       .optional()
@@ -178,25 +179,129 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     {
       title: "Ask Panel (multi-model)",
       description:
-        "HAND-PICK one or more models and get raw, labeled answers back for YOU to synthesize. " +
-        "Specs run CONCURRENTLY (wall-clock ≈ slowest seat, not the sum). 1-spec = single call " +
-        "(the way to ask grok-4.6, Gemini Flash latest, GPT Sol latest, or Sonnet latest one question). Multi-spec = second opinions / " +
-        "cross-family panel (e.g. grok + gemini + openai, or sonnet beside them, or the same model twice). " +
-        "Each spec picks model ('grok'|'gemini'|'openai'|'sonnet'), optional live grounding " +
-        "(gemini web / grok X; openai/sonnet cannot ground), and lens. Effort and temperature are not caller knobs. Results stay " +
-        "in input order with ok flags; one seat failing does NOT fail siblings. This tool GATHERS — it " +
-        "does not judge. Auto-routing counterpart: ask_consortium (classifies and picks seats for you). " +
-        "Live-X sentiment: model:'grok' grounded:true (citations when search fires). " +
-        "Strategy/tradeoffs you want auto-routed → ask_consortium; multi-hop evidence → research_fanout.",
+        "One question, many models. Leave specs EMPTY to auto-fill distinct families: Gemini Flash latest, " +
+        "GPT Sol latest, Sonnet latest, then openrouter/auto-beta, and that same four repeats. Pass " +
+        "min_perspectives to floor the count (\"at least three perspectives\"); the classifier may seat more. " +
+        "OR name models in specs and those seats answer the same prompt (a spec prompt overrides that one seat). " +
+        "Specs together with min_perspectives, force_grounding, engine, or fusion_preset FAILS — name the models, " +
+        "or leave specs empty. Do not send an empty specs array. " +
+        "DEFAULT returns RAW labeled answers for YOU to synthesize. synthesize:true returns ONE merged answer. " +
+        "system is an extra instruction on every seat. lens forces a frame; omit it on the auto path and the " +
+        "classifier picks. On a named panel, a top-level lens fills any spec that omitted one. " +
+        "Live X: a spec with model 'grok' and grounded true. Web grounding on the auto path: force_grounding, " +
+        "or the classifier when the question needs live facts. engine:\"fusion\" is the slow contested-question " +
+        "escalation and only applies when specs are empty. Effort and temperature are not caller knobs. " +
+        "Multi-hop evidence → research_fanout.",
       inputSchema: {
+        prompt: z
+          .string()
+          .refine((s) => s.trim().length > 0, { message: "prompt must not be empty or whitespace-only" })
+          .describe("The question. Named specs answer it unless a spec sets its own prompt. Required."),
         specs: z
           .array(specSchema)
-          .min(1, "provide at least one spec")
           .max(8, "at most 8 specs per panel")
-          .describe("The model queries to run concurrently. One spec = single query; multiple = parallel panel."),
+          .optional()
+          .describe("Name the models, or omit to auto-fill. One spec = one model; several = those models on this prompt. An empty array fails."),
+        synthesize: z
+          .boolean()
+          .optional()
+          .describe("true → ONE merged answer (judge = gemini-flash-latest). Default false → raw labeled answers. (research_fanout's synthesize defaults to the opposite, true.)"),
+        system: z
+          .string()
+          .optional()
+          .describe("Extra instruction on every seat — persona, tone, output format, constraints. On a named panel, a spec system overrides this for that seat. Composes with the lens: lens body first, then this text."),
+        min_perspectives: z
+          .number()
+          .int()
+          .min(1)
+          .max(8)
+          .optional()
+          .describe("Auto path only. At least this many perspectives. The classifier may seat more. Omit and the classifier decides. Fails if specs is also set."),
+        lens: z
+          .string()
+          .optional()
+          .describe(
+            "Analytical frame. On the auto path the classifier picks one unless you set this (or 'none'). " +
+              "On a named panel this fills any spec that omitted lens. Choose one: " +
+              buildLensMenu() +
+              ". Composes with system: lens body first, then system text.",
+          ),
+        force_grounding: z
+          .boolean()
+          .optional()
+          .describe("Auto path only. Add a web-grounded Gemini seat (Google Search) that errors if no citations come back. Fails if specs is also set."),
+        engine: z
+          .enum(["fusion"])
+          .optional()
+          .describe(
+            "Auto path only. Opt-in escalation for a genuinely contested question. Runs OpenRouter Fusion as one seat " +
+              "in place of the reasoning pool. Fails if specs is also set.",
+          ),
+        fusion_preset: z
+          .enum(["general-budget", "general-high", "general-fast"])
+          .optional()
+          .describe("Fusion tier when engine is fusion. general-budget is the default. general-fast is a latency preset, not Sol's service tier. Ignored unless engine is set. Fails if specs is also set."),
       },
     },
-    async ({ specs }: { specs: z.infer<typeof specSchema>[] }) => {
+    async (args: {
+      prompt: string;
+      specs?: z.infer<typeof specSchema>[];
+      synthesize?: boolean;
+      system?: string;
+      min_perspectives?: number;
+      lens?: string;
+      force_grounding?: boolean;
+      engine?: "fusion";
+      fusion_preset?: FusionPreset;
+    }) => {
+      const named = !!args.specs && args.specs.length > 0;
+      if (args.specs && args.specs.length === 0) {
+        return {
+          content: [{ type: "text", text: "ask_panel: omit specs to auto-fill, or name at least one model." }],
+          isError: true,
+        };
+      }
+      if (named && (args.min_perspectives != null || args.force_grounding != null || args.engine != null || args.fusion_preset != null)) {
+        return {
+          content: [{
+            type: "text",
+            text: "ask_panel: name the models in specs, or leave specs empty to auto-fill. Do not combine specs with min_perspectives, force_grounding, engine, or fusion_preset.",
+          }],
+          isError: true,
+        };
+      }
+      if (!named) {
+        try {
+          const result = await runOracle(
+            {
+              xaiApiKey: opts.xaiApiKey,
+              geminiApiKey: opts.geminiApiKey,
+              openrouterApiKey: opts.openrouterApiKey,
+              xaiBaseUrl: opts.xaiBaseUrl,
+              budget: budgetProfile,
+            },
+            args.prompt,
+            {
+              synthesize: args.synthesize,
+              system: args.system,
+              min_perspectives: args.min_perspectives,
+              lens: args.lens,
+              force_grounding: args.force_grounding,
+              engine: args.engine,
+              fusion_preset: args.fusion_preset,
+            },
+          );
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        } catch (err) {
+          return { content: [{ type: "text", text: `ask_panel failed: ${(err as Error).message}` }], isError: true };
+        }
+      }
+      const specs = args.specs!.map((spec) => ({
+        ...spec,
+        prompt: spec.prompt?.trim() ? spec.prompt : args.prompt,
+        system: spec.system ?? args.system,
+        lens: spec.lens ?? args.lens,
+      }));
       const panelT0 = Date.now();
       const outerMs = budgetProfile.panelOuterMs;
       const settled = await mapLimit(specs, CONCURRENCY, async (spec, idx) => {
@@ -513,6 +618,38 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       } else if (anyFailover) {
         recovery_note =
           "OpenRouter stalled on at least one Gemini seat; direct-gemini failover recovered.";
+      }
+
+      if (args.synthesize) {
+        const oks = results.filter((r) => r.ok === true && typeof r.text === "string");
+        if (oks.length > 0) {
+          try {
+            const answer = await judgeLabeledAnswers(
+              {
+                xaiApiKey: opts.xaiApiKey,
+                geminiApiKey: opts.geminiApiKey,
+                openrouterApiKey: opts.openrouterApiKey,
+                xaiBaseUrl: opts.xaiBaseUrl,
+                budget: budgetProfile,
+              },
+              oks.map((r) => ({
+                id: String(r.label),
+                text: r.text as string,
+                citations: Array.isArray(r.citations) ? r.citations.filter((c): c is string => typeof c === "string") : undefined,
+              })),
+              { startedAt: panelT0, outerMs: budgetProfile.panelOuterMs },
+            );
+            const body = recovery_note ? { recovery_note, answer } : { answer };
+            return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }] };
+          } catch (err) {
+            const body = {
+              judge_error: (err as Error).message,
+              ...(recovery_note ? { recovery_note } : {}),
+              results,
+            };
+            return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }] };
+          }
+        }
       }
 
       const body = recovery_note ? { recovery_note, results } : results;

@@ -16,10 +16,10 @@ for (let i = 1; i <= n; i++) {
     id: i,
     method: "tools/call",
     params: {
-      name: "ask_oracle",
+      name: "ask_panel",
       arguments: {
         prompt: `Live probe ${i}: what is ${i}+${i}? Reply with just the number.`,
-        panel_size: 2,
+        min_perspectives: 2,
         synthesize: false,
       },
     },
