@@ -457,10 +457,6 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           .string()
           .optional()
           .describe("Extra system text for synthesis only (not leg generation)."),
-        reasoning_effort: z
-          .enum(["low", "medium", "high"])
-          .optional()
-          .describe("Effort for grounded legs (default high)."),
         force_x_leg: z
           .boolean()
           .optional()
@@ -477,13 +473,12 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
       max_legs?: number;
       lens?: string;
       system?: string;
-      reasoning_effort?: "low" | "medium" | "high";
       force_x_leg?: boolean;
     }) => {
       const outerT0 = Date.now();
       const maxLegs = Math.min(MAX_LEGS_HARD, Math.max(1, args.max_legs ?? 4));
       const doSynth = args.synthesize !== false;
-      const effort = args.reasoning_effort;
+      const effort = undefined;
       const qHash = hashQuestion(args.prompt);
       const phases = { decompose_ms: 0, legs_ms: 0, synth_ms: undefined as number | undefined };
 

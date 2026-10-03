@@ -253,7 +253,7 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   // capped an explicit force too.)
   const explicitEffort = ov.reasoning_effort;
   const effort = explicitEffort ?? capEffort(c.reasoning_effort, ov.max_effort);
-  // GPT-6 Sol's own default is medium. A classifier "high" was forcing the GPT
+  // GPT Sol latest's own default is medium. A classifier "high" was forcing the GPT
   // seat up and into the chat timeout. Cap it unless the caller set reasoning_effort.
   const effortFor = (slug: string): Effort =>
     !explicitEffort && /gpt|openai/i.test(slug) ? capEffort(effort, "medium") : effort;
@@ -965,7 +965,7 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         "does NOT judge (same output contract as ask_panel); pass synthesize:true for ONE merged verdict. " +
         "SEATS come in two kinds: CAPABILITY seats — live-X (Grok x_search, still available as a " +
         "capability seat via force_x / classifier) and web grounding (Gemini Google Search) — and " +
-        "REASONING seats. Multi-seat REASONING default is Grok-primary: Gemini Flash latest → GPT-6 Sol → " +
+        "REASONING seats. Multi-seat REASONING default is Grok-primary: Gemini Flash latest → GPT Sol latest → " +
         "openrouter/auto-beta (no grok-direct opinion seat, so a Grok caller does not consult itself). " +
         "Pass exclude_family:\"none\" only when you want full cross-family including a grok-direct " +
         "contrarian. The classifier decides how many seats, which capabilities, which lens, and how hard " +
@@ -973,9 +973,9 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         "who decided + why), `slots_status`, a `degraded` flag, and either `raw` labeled answers " +
         "(DEFAULT — YOU synthesize) or a single `answer` when synthesize=true (for headless callers). " +
         "ask_consortium keeps NO model hand-pick knobs by design — describe the question and it picks " +
-        "the panel. To name the exact model per seat (grok-4.6|Gemini Flash latest|GPT-6 Sol|Sonnet latest), or set per-member " +
-        "grounding/temperature/lens, use ask_panel. Optional overrides (capabilities, effort, lens, " +
-        "panel size, exclude_family) supersede the classifier. FUSION (`engine:\"fusion\"`) is deliberate " +
+        "the panel. To name the exact model per seat (grok-4.6|Gemini Flash latest|GPT Sol latest|Sonnet latest), or set per-member " +
+        "grounding or lens, use ask_panel. Optional overrides (capabilities, lens, " +
+        "panel size, exclude_family) supersede the classifier. Effort is not a caller knob. FUSION (`engine:\"fusion\"`) is deliberate " +
         "ESCALATION only for genuinely contested questions (real tradeoffs, expert disagreement, high " +
         "cost of being wrong) — not tactical/factual prompts; OR internal multi-model panel+judge " +
         "(~40–120s, multi-seat cost).",
@@ -1009,14 +1009,6 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
               buildLensMenu() +
               ". Composes with `system`: lens body first, then your `system` text.",
           ),
-        reasoning_effort: z
-          .enum(["low", "medium", "high"])
-          .optional()
-          .describe("Force reasoning effort (low|medium|high) on every seat. Takes PRECEDENCE over max_effort. Omit to let the classifier scale effort with difficulty."),
-        max_effort: z
-          .enum(["low", "medium", "high"])
-          .optional()
-          .describe("Ceiling on the CLASSIFIER's effort pick — it may choose lower, never higher. Does NOT cap an explicit reasoning_effort (that wins)."),
         force_x: z
           .boolean()
           .optional()
@@ -1028,7 +1020,7 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
         exclude_family: z
           .string()
           .optional()
-          .describe("Reasoning-pool family policy. DEFAULT (omit or \"grok\") is Grok-primary: no grok-direct REASONING seat — multi-seat fill is Gemini Flash latest → GPT-6 Sol → openrouter/auto-beta. Pass \"none\" or \"off\" only when the caller is NOT Grok and you want a grok-direct contrarian opinion seat (full cross-family: Gemini Flash latest → grok-4.6 → GPT-6 Sol → auto). Capability seats (live-X, grounding) are EXEMPT — grok-x is data retrieval, not Grok's opinion. Ignored when engine:\"fusion\"."),
+          .describe("Reasoning-pool family policy. DEFAULT (omit or \"grok\") is Grok-primary: no grok-direct REASONING seat — multi-seat fill is Gemini Flash latest → GPT Sol latest → openrouter/auto-beta. Pass \"none\" or \"off\" only when the caller is NOT Grok and you want a grok-direct contrarian opinion seat (full cross-family: Gemini Flash latest → grok-4.6 → GPT Sol latest → auto). Capability seats (live-X, grounding) are EXEMPT — grok-x is data retrieval, not Grok's opinion. Ignored when engine:\"fusion\"."),
         engine: z
           .enum(["fusion"])
           .optional()
@@ -1058,8 +1050,6 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
       system?: string;
       panel_size?: number;
       lens?: string;
-      reasoning_effort?: Effort;
-      max_effort?: Effort;
       force_x?: boolean;
       force_grounding?: boolean;
       exclude_family?: string;
@@ -1072,8 +1062,6 @@ export function registerAskOracle(server: any, opts: OracleRegisterOpts) {
           system: args.system,
           n: args.panel_size,
           lens: args.lens,
-          reasoning_effort: args.reasoning_effort,
-          max_effort: args.max_effort,
           force_x: args.force_x,
           force_grounding: args.force_grounding,
           exclude_family: args.exclude_family,

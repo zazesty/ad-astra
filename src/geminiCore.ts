@@ -49,12 +49,16 @@ export function geminiHonorsThinking(model: string): boolean {
 /**
  * Effort actually attached to a request.
  * Gemini Flash/Pro (and the bare panel model "gemini", which resolves to Flash)
- * send high when the caller omits it. Every other family omits the field.
+ * send high when the caller omits it. Sonnet sends medium: Sonnet 5.5's own
+ * default is high, and medium is our seat default. Sonnet 5.5 at medium is
+ * faster, more capable, and cheaper per task than Sonnet 5 at high. An explicit
+ * request always wins. Every other family omits the field.
  */
 export function wireReasoningEffort(modelSlug: string | undefined, requested?: string): string | undefined {
   if (requested) return requested;
   const s = modelSlug ?? "";
   if (s === "gemini" || geminiHonorsThinking(s)) return "high";
+  if (/sonnet|claude/i.test(s)) return "medium";
   return undefined;
 }
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -257,9 +261,10 @@ export interface CallOpenRouterOpts {
  *     gemini slug. `grounded` on a non-gemini slug is a no-op + a loud warning —
  *     OR serves Grok as plain chat, so a grounded grok request would SILENTLY
  *     lose grounding; we surface it instead.
- *   - Reasoning effort: Gemini Flash/Pro get high when the caller omits it.
- *     Flash-Lite, Claude, GPT, Grok, auto, and fusion omit the field unless the
- *     caller set one. Gemini 2.5 Flash still 400s on thinkingLevel, so it is excluded.
+ *   - Reasoning effort: Gemini Flash/Pro get high when the field is omitted.
+ *     Sonnet is sent medium. GPT, Grok, auto, and fusion omit the field
+ *     (Sol's own default is medium; Grok's own default is high).
+ *     Gemini 2.5 Flash still 400s on thinkingLevel, so it is excluded.
  */
 export async function callOpenRouter(
   apiKey: string | undefined,
@@ -288,7 +293,7 @@ export async function callOpenRouter(
 
   const body: Record<string, unknown> = { model, messages };
   if (effort && supportsEffort) body.reasoning = { effort };
-  // Google Priority (their fast tier). OpenRouter forwards service_tier on Gemini only.
+  // Google Priority lane, Gemini only. OpenRouter forwards service_tier for it.
   if (isGemini) body.service_tier = "priority";
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
   if (opts.response_format) body.response_format = opts.response_format;

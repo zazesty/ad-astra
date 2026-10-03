@@ -2,10 +2,15 @@
  * Shared model pins (oracle, panel, classifier).
  * Bump deliberately when the OpenRouter / provider catalog moves.
  * Prefer versioned pins over floating aliases unless latency-irrelevant.
+ * Exception: GPT_OPENROUTER_SLUG is the floating Sol alias (2026-10-03).
  */
 
-/** OpenAI diversity seat — GPT-6 Sol. Blank effort stays at Sol's medium default. */
-export const GPT_OPENROUTER_SLUG = "openai/gpt-6-sol";
+/**
+ * OpenAI diversity seat. `~openai/gpt-sol-latest` always tracks the current Sol.
+ * Blank effort stays at Sol's medium default. Consortium caps a classifier
+ * "high" at medium. The MCP schema does not accept a caller effort override.
+ */
+export const GPT_OPENROUTER_SLUG = "~openai/gpt-sol-latest";
 
 /**
  * OpenRouter Auto Router seat (overflow / n=1 default).
@@ -19,8 +24,12 @@ export const OPENROUTER_AUTO_SLUG = "openrouter/auto-beta";
  * ask_panel Claude seat via OpenRouter (Anthropic): sonnet only.
  * `model:"opus"` and an opus model_slug still remap to sonnet (callers that
  * cached the old enum). The public schema no longer lists opus. Floating
- * `~…-latest` aliases track the current gen (verified 2026-08: sonnet-5).
- * Versioned pin if the alias 404s: anthropic/claude-sonnet-5.
+ * `~…-latest` aliases track the current gen (2026-10: Sonnet 5.5).
+ * Omitted effort is sent as medium. Anthropic's own Sonnet 5.5 default is high.
+ * Sonnet 5.5 at medium is faster, more capable, and cheaper per task than
+ * Sonnet 5 at high, so the seat does not stay on Anthropic's high default.
+ * The MCP schema does not accept a caller effort override. Versioned pin if the alias 404s:
+ * anthropic/claude-sonnet-5.5.
  */
 export const CLAUDE_OPUS_OPENROUTER_SLUG = "~anthropic/claude-opus-latest";
 export const CLAUDE_SONNET_OPENROUTER_SLUG = "~anthropic/claude-sonnet-latest";

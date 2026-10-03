@@ -134,8 +134,8 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .describe(
         "Backend for this spec. 'grok' (xAI direct, grok-4.6) — contrarian; grounded:true searches X " +
           "(+web if include_web). 'gemini' (Gemini Flash latest) — strong reasoning + best live web grounding. " +
-          "'openai' (OpenRouter, GPT-6 Sol) — third-family voice. " +
-          "'sonnet' (Sonnet latest) — Claude seat. " +
+          "'openai' (OpenRouter, GPT Sol latest) — third-family voice. " +
+          "'sonnet' (Sonnet latest) — Claude seat, sent medium. Sonnet 5.5 at medium is faster, more capable, and cheaper per task than Sonnet 5 at high. " +
           "openai/sonnet: no native web/X grounding (grounded:true errors).",
       ),
     prompt: z
@@ -163,21 +163,13 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .optional()
       .describe("Optional system instruction for this spec — persona, tone, output format, constraints."),
     lens: z.string().optional().describe(buildLensParamDescription()),
-    reasoning_effort: z
-      .enum(["low", "medium", "high"])
-      .optional()
-      .describe("How hard the model thinks (low|medium|high). Omit for the seat default: Gemini Flash latest is sent high; Grok and Sonnet latest leave the field off (their default is high); GPT-6 Sol leaves it off (its default is medium)."),
-    temperature: z
-      .number()
-      .optional()
-      .describe("Sampling temperature. Omit for the model default. Vary across otherwise-identical specs to sample a spread of takes."),
     model_slug: z
       .string()
       .optional()
       .describe(
         "Advanced: override the exact model id (grok-*, gemini-*, OpenRouter openai/* or anthropic/* slug). " +
           "Omit unless you know the exact slug — server defaults are almost always right " +
-          "(openai→GPT-6 Sol, sonnet→Sonnet latest, gemini→Gemini Flash latest).",
+          "(openai→GPT Sol latest, sonnet→Sonnet latest, gemini→Gemini Flash latest).",
       ),
   });
 
@@ -188,10 +180,10 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       description:
         "HAND-PICK one or more models and get raw, labeled answers back for YOU to synthesize. " +
         "Specs run CONCURRENTLY (wall-clock ≈ slowest seat, not the sum). 1-spec = single call " +
-        "(the way to ask grok-4.6, Gemini Flash latest, GPT-6 Sol, or Sonnet latest one question). Multi-spec = second opinions / " +
-        "cross-family panel (e.g. grok + gemini + openai, or sonnet beside them, or same model at two temps). " +
+        "(the way to ask grok-4.6, Gemini Flash latest, GPT Sol latest, or Sonnet latest one question). Multi-spec = second opinions / " +
+        "cross-family panel (e.g. grok + gemini + openai, or sonnet beside them, or the same model twice). " +
         "Each spec picks model ('grok'|'gemini'|'openai'|'sonnet'), optional live grounding " +
-        "(gemini web / grok X; openai/sonnet cannot ground), lens, and temperature. Results stay " +
+        "(gemini web / grok X; openai/sonnet cannot ground), and lens. Effort and temperature are not caller knobs. Results stay " +
         "in input order with ok flags; one seat failing does NOT fail siblings. This tool GATHERS — it " +
         "does not judge. Auto-routing counterpart: ask_consortium (classifies and picks seats for you). " +
         "Live-X sentiment: model:'grok' grounded:true (citations when search fires). " +
@@ -252,7 +244,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             grounded_requested: !!spec.grounded,
             grounding_fired: ok && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
             x_search_fired: ok && model === "grok" && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
-            reasoning_effort: loggedReasoningEffort(extra.model_slug || defaultSlug, spec.reasoning_effort),
+            reasoning_effort: loggedReasoningEffort(extra.model_slug || defaultSlug),
             latency_ms: Date.now() - t0,
             failover_fired: !!extra.failover_fired,
             timed_out: !!extra.timed_out || isAttemptTimeoutError(extra.error),
@@ -300,8 +292,6 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
                 {
                   system,
                   model: modelSlug,
-                  reasoning_effort: spec.reasoning_effort,
-                  temperature: spec.temperature,
                   grounding,
                   include_web: spec.include_web,
                 },
@@ -332,8 +322,6 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             try {
               const r = await callOpenRouter(opts.openrouterApiKey, defaultSlug, spec.prompt, {
                 system,
-                reasoning_effort: spec.reasoning_effort,
-                temperature: spec.temperature,
                 attempt_timeout_ms: capAttemptMs(t0, budget, budgetProfile.panelOrAttemptMs),
               });
               record(true, {
@@ -363,8 +351,6 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             system,
             model: modelSlug,
             grounded: spec.grounded,
-            reasoning_effort: spec.reasoning_effort,
-            temperature: spec.temperature,
             // Always pass the panel OR attempt budget when OR is the transport
             // (ungrounded used to inherit global 15s and mass-timeout).
             ...(geminiTransport === "openrouter"
