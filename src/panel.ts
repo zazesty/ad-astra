@@ -179,9 +179,9 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     {
       title: "Ask Panel (multi-model)",
       description:
-        "One question, many models. Leave specs EMPTY to auto-fill distinct families: Gemini Flash latest, " +
-        "GPT Sol latest, Sonnet latest, then openrouter/auto-beta, and that same four repeats. Pass " +
-        "min_perspectives to floor the count (\"at least three perspectives\"); the classifier may seat more. " +
+        "One question, many models. Leave specs EMPTY to auto-fill at most four, once: Gemini Flash latest, " +
+        "GPT Sol latest, Sonnet latest, then openrouter/auto-beta. The classifier picks 1–4. " +
+        "Pass min_perspectives to ask for more, up to 8; past four that same four repeats. " +
         "OR name models in specs and those seats answer the same prompt (a spec prompt overrides that one seat). " +
         "Specs together with min_perspectives, force_grounding, engine, or fusion_preset FAILS — name the models, " +
         "or leave specs empty. Do not send an empty specs array. " +
@@ -216,7 +216,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           .min(1)
           .max(8)
           .optional()
-          .describe("Auto path only. At least this many perspectives. The classifier may seat more. Omit and the classifier decides. Fails if specs is also set."),
+          .describe("Auto path only. At least this many perspectives (1–8). Omit and the classifier decides, at most 4. Above 4 repeats the four families. The classifier may seat more than this floor. Fails if specs is also set."),
         lens: z
           .string()
           .optional()

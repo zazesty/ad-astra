@@ -197,11 +197,12 @@ function panelFillPool(existing: Seat[]): string[] {
  * Grok is the usual caller and must not consult itself. Cross-family dissent only:
  *
  *   1 seat (with exclude_family:"grok" legacy) → gemini
- *   multi-seat default → gemini · gpt · sonnet · auto-beta, then that same
- *   four repeats for seat 5 on. Never a grok opinion seat.
+ *   multi-seat default → gemini · gpt · sonnet · auto-beta.
+ *   Never a grok opinion seat. With no min_perspectives the classifier
+ *   stops at 4. min_perspectives above 4 walks the same four again.
  *
- * The returned array is one rotation of that four, so `i % length` repeats
- * it forever. A family already seated (a grounded Gemini capability seat)
+ * The returned array is one rotation of that four, so a seat count above 4
+ * repeats it. A family already seated (a grounded Gemini capability seat)
  * is skipped only at the start of the first cycle. Capability seats stay
  * in `buildSlots` before this runs — grok-x is live-X data, not Grok's opinion.
  * exclude_family is not on the schema. "grok" remains a legacy synonym for
@@ -303,8 +304,10 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
     return seats;
   }
   // Seat count: an internal exact `n` wins. Otherwise the floor is the
-  // greater of the classifier's pick and min_perspectives. Capability seats
-  // already pushed are never dropped.
+  // greater of the classifier's pick and min_perspectives. The classifier
+  // itself stops at 4, so the default (no min_perspectives) is at most one
+  // cycle. min_perspectives above 4 is the opt-in second cycle.
+  // Capability seats already pushed are never dropped.
   const classifierN = c.suggested_panel_n ?? 1;
   const floor = Math.max(classifierN, ov.min_perspectives ?? 1);
   const want = ov.n ?? floor;

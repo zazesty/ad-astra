@@ -172,6 +172,9 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(/gemini/i.test(raised[0].model_slug) && /gpt/i.test(raised[1].model_slug) && /sonnet|claude/i.test(raised[2].model_slug), "floor of 3 is gemini, sol, sonnet");
   const kept = buildSlots(C({ suggested_panel_n: 4 }), { min_perspectives: 2 });
   ok(kept.length === 4, "min_perspectives does not shrink a larger classifier pick");
+  const more = buildSlots(C({ suggested_panel_n: 1 }), { min_perspectives: 8 });
+  ok(more.length === 8, "min_perspectives 8 is the opt-in second cycle");
+  ok(more[3].model_slug === "openrouter/auto-beta" && more[7].id === "auto-2", "past four, the same four repeat");
 }
 {
   const s = buildSlots(C({ needs_x: true, needs_grounding: true }), { n: 1 });
