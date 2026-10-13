@@ -128,8 +128,19 @@ async function run() {
       check(`sol tier fast: ${slug}`, body.service_tier === "fast" && body.provider === undefined);
       check(`sol detector: ${slug}`, isOpenAiSolSlug(slug));
     }
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      service_tier: "priority",
+      choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    const hit = await callOpenRouter("sk-test", "~openai/gpt-sol-latest", "hi", { attempt_timeout_ms: 5000 });
+    globalThis.fetch = realFetch;
+    check("sol fast hit reported priority", hit.service_tier === "priority");
     const gemini = await tierFor("~google/gemini-flash-latest");
     check("gemini tier stays priority", gemini.service_tier === "priority");
+    check("omitted flash effort is high", gemini.reasoning?.effort === "high");
+    const argon = await tierFor("google/gemini-4-argon");
+    check("argon tier stays priority", argon.service_tier === "priority" && argon.model === "google/gemini-4-argon");
+    check("omitted argon effort is medium", argon.reasoning?.effort === "medium");
     const bareGemini = await tierFor("gemini-2.5-flash");
     check("bare gemini tier stays priority", bareGemini.service_tier === "priority" && bareGemini.model === "google/gemini-2.5-flash");
     for (const slug of ["openai/gpt-6-luna", "openrouter/auto-beta", "~anthropic/claude-sonnet-latest", "x-ai/grok-4.6"]) {

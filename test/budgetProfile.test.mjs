@@ -9,7 +9,7 @@ import {
   CHAT_BUDGET,
 } from "../build/budgetProfile.js";
 import { canStartAttempt, capAttemptMs, MIN_NEXT_ATTEMPT_MS } from "../build/timeouts.js";
-import { applyOpusRemap } from "../build/panel.js";
+import { applyOpusRemap, normalizePanelModel } from "../build/panel.js";
 
 let pass = 0;
 let fail = 0;
@@ -61,6 +61,8 @@ check(
   applyOpusRemap({ model: "opus", model_slug: "~anthropic/claude-sonnet-latest" }).model_slug ===
     "~anthropic/claude-sonnet-latest",
 );
+check("gemini token normalizes to argon", normalizePanelModel("gemini") === "argon");
+check("argon token stays argon", normalizePanelModel("argon") === "argon");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

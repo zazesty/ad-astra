@@ -6,7 +6,7 @@
  *
  *   node test/geminiCore.test.mjs
  */
-import { extractOpenRouterResult, extractDirectCitations, OpenRouterError, isTransientError } from "../build/geminiCore.js";
+import { extractOpenRouterResult, extractDirectCitations, servedServiceTier, OpenRouterError, isTransientError } from "../build/geminiCore.js";
 
 let pass = 0;
 let fail = 0;
@@ -71,6 +71,28 @@ console.log("Unit: extractOpenRouterResult");
 {
   const r = extractOpenRouterResult({});
   check("no choices => placeholder", r.text === "(no content returned)" && r.citations.length === 0);
+  check("no tier => absent", r.service_tier === undefined);
+}
+
+// 5b. Served tier. Sol fast hits are reported as priority, not fast.
+{
+  const hit = extractOpenRouterResult({
+    service_tier: "priority",
+    choices: [{ message: { content: "ok" } }],
+  });
+  check("top-level priority kept", hit.service_tier === "priority");
+  const shed = extractOpenRouterResult({
+    service_tier: "default",
+    choices: [{ message: { content: "ok" } }],
+  });
+  check("shed default kept", shed.service_tier === "default");
+  const usage = extractOpenRouterResult({
+    usage: { service_tier: "Priority" },
+    choices: [{ message: { content: "ok" } }],
+  });
+  check("usage fallback lowercased", usage.service_tier === "priority");
+  check("null tier dropped", servedServiceTier({ service_tier: null }) === undefined);
+  check("string null dropped", servedServiceTier({ service_tier: "null" }) === undefined);
 }
 
 console.log("\nUnit: extractDirectCitations (@google/genai groundingMetadata)");

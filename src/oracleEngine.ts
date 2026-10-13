@@ -25,6 +25,7 @@ import {
   isTransientError,
   DEFAULT_OPENROUTER_GEMINI_MODEL,
   type FusionPreset,
+  type GeminiResult,
 } from "./geminiCore.js";
 import { applyLens } from "./lenses.js";
 import {
@@ -143,10 +144,9 @@ export function capEffort(effort: Effort, max?: Effort): Effort {
   return max && EFFORT_RANK[effort] > EFFORT_RANK[max] ? max : effort;
 }
 
-// The gemini reasoning/grounded slug is the floating pro alias the rest of the
-// codebase uses (tilde required; bare "google/gemini-3.1-pro" 400s on OR — caught
-// live 2026-06-24). Single source of truth = geminiCore's export, so the
-// gemini-model-check monitor covers oracle's seats too.
+// Gemini reasoning/grounded slug. Stable Gemini 4 Argon id (no "~").
+// Single source of truth = geminiCore's export, so the gemini-model-check
+// monitor covers oracle's seats too. The const name is historical.
 const GEMINI_PRO_SLUG = DEFAULT_OPENROUTER_GEMINI_MODEL;
 // Single-seat default: at n=1 diversity is meaningless, so the cheap/fast wildcard
 // leads. OPENROUTER_AUTO_SLUG (auto-beta) lets OR pick per-prompt. GPT pin: modelPins.
@@ -276,11 +276,12 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   // capped an explicit force too.)
   const explicitEffort = ov.reasoning_effort;
   const effort = explicitEffort ?? capEffort(c.reasoning_effort, ov.max_effort);
-  // Sol's own default is medium, and Sonnet is sent medium. A classifier "high"
-  // was forcing those seats up and into the chat timeout. Cap both unless the
+  // Sol's own default is medium, and Sonnet is sent medium. Argon high missed
+  // the 40s chat abort (2026-10-13 bakeoff median 48.5s). A classifier "high"
+  // was forcing those seats up and into the chat timeout. Cap them unless the
   // caller set reasoning_effort.
   const effortFor = (slug: string): Effort =>
-    !explicitEffort && /gpt|openai|sonnet|claude|anthropic/i.test(slug) ? capEffort(effort, "medium") : effort;
+    !explicitEffort && /gpt|openai|sonnet|claude|anthropic|argon|gemini/i.test(slug) ? capEffort(effort, "medium") : effort;
   const seats: Seat[] = [];
 
   // capability seats — native tools, never routed through `auto`
@@ -421,6 +422,7 @@ interface DispatchOutcome {
   citations: string[];
   transport: "or" | "direct";
   failover_fired: boolean;
+  service_tier?: string;
 }
 
 interface SlotResult {
@@ -432,6 +434,7 @@ interface SlotResult {
   transport?: "or" | "direct";
   failover_fired?: boolean;
   latency_ms?: number;
+  served_tier?: string;
 }
 
 /** Zero-citation fail-loud retry, generic over the call path (OR-native or direct
@@ -440,11 +443,11 @@ interface SlotResult {
  *  answer back as grounded. The thrown error is a plain Error (NOT transient) so the
  *  failover wrapper rethrows it instead of looping providers. */
 async function groundedWithRetry(
-  once: () => Promise<{ text: string; citations: string[] }>,
+  once: () => Promise<GeminiResult>,
   seatId: string,
   pathLabel: string,
   attemptBudget?: AttemptBudget,
-): Promise<{ text: string; citations: string[] }> {
+): Promise<GeminiResult> {
   let r = await once();
   for (let attempt = 1; attempt <= MAX_GROUNDING_RETRIES && r.citations.length === 0; attempt++) {
     if (attemptBudget && !canStartAttempt(attemptBudget.startedAt, attemptBudget.budgetMs)) {
@@ -546,7 +549,7 @@ async function orReasoningWithFailover(
       ...opts,
       attempt_timeout_ms: capAttemptMs(attemptBudget.startedAt, attemptBudget.budgetMs, profile.oracleOrAttemptMs),
     });
-    return { text: r.text, citations: r.citations, transport: "or", failover_fired: false };
+    return { text: r.text, citations: r.citations, transport: "or", failover_fired: false, service_tier: r.service_tier };
   } catch (e) {
     if (!isTransientError(e)) throw e;
     if (!canStartAttempt(attemptBudget.startedAt, attemptBudget.budgetMs)) {
@@ -595,7 +598,7 @@ async function fusionDispatch(
       profile.oracleFusionOrAttemptMs,
     ),
   });
-  return { text: r.text, citations: r.citations, transport: "or", failover_fired: false };
+  return { text: r.text, citations: r.citations, transport: "or", failover_fired: false, service_tier: r.service_tier };
 }
 
 async function dispatchSeat(
@@ -676,6 +679,7 @@ async function executeSlots(
           citations: r.citations,
           transport: r.transport,
           failover_fired: r.failover_fired,
+          served_tier: r.service_tier,
           latency_ms: Date.now() - t0,
         };
       } catch (e) {
@@ -738,6 +742,7 @@ function recordOracleMetrics(
       error_class: classifyError(r.status, r.error),
       question_hash: qHash,
       prompt_preview: preview,
+      served_tier: r.served_tier,
     };
     void recordSeatMetric(rec);
   }
@@ -758,12 +763,13 @@ async function synthesize(
     "You are a synthesizer. Merge the labeled model answers below into ONE coherent answer. " +
     "State points of agreement plainly; surface genuine disagreements explicitly rather than averaging them away; " +
     "preserve citations. Do not mention that you are merging multiple sources.";
-  // Judge is PINNED to gemini-flash-latest, not openrouter/auto-beta: synthesis is a
+  // Judge is PINNED to gemini-4-argon, not openrouter/auto-beta: synthesis is a
   // fixed, well-defined task that wants a strong, predictable reasoner — auto
   // optimizes per-prompt and could route a "merge these" call somewhere weak/
-  // unexpected. (NB: deliberately NOT openrouter/fusion — Fusion runs its OWN
-  // panel, which would re-answer + double-spend over seats we already ran; Fusion
-  // is reserved as a separate optional hard-route ENGINE, see spec §6a.)
+  // unexpected. Medium, same cap as the Argon seat. (NB: deliberately NOT
+  // openrouter/fusion — Fusion runs its OWN panel, which would re-answer +
+  // double-spend over seats we already ran; Fusion is reserved as a separate
+  // optional hard-route ENGINE, see spec §6a.)
   // Judge runs through the same OR→direct failover as reasoning seats — synthesize
   // is the headless path (synthesize:true), so it must survive an OR outage rather
   // than hard-error. GEMINI_PRO_SLUG is gemini → fails over to direct-gemini.
@@ -778,7 +784,7 @@ async function synthesize(
   }
   const r = await orReasoningWithFailover(deps, GEMINI_PRO_SLUG, blocks, {
     system,
-    reasoning_effort: route.reasoning_effort,
+    reasoning_effort: capEffort(route.reasoning_effort, "medium"),
   }, { startedAt: t0, budgetMs });
   return r.text;
 }

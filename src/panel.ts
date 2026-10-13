@@ -22,6 +22,7 @@ import {
   isTransientError,
   makeGeminiClient,
   type GeminiClient,
+  type GeminiResult,
   type GeminiTransport,
 } from "./geminiCore.js";
 import { applyLens, buildLensMenu, buildLensParamDescription } from "./lenses.js";
@@ -80,6 +81,11 @@ type RegisterOpts = {
   budget?: BudgetProfile;
 };
 
+/** Public enum is argon. A stale caller that still sends gemini runs the same seat. */
+export function normalizePanelModel(model: unknown): unknown {
+  return model === "gemini" ? "argon" : model;
+}
+
 /** Opus is gone from the schema. A stale caller, or an opus model_slug, still runs sonnet. */
 export function applyOpusRemap(spec: { model: string; model_slug?: string }): {
   model: string;
@@ -129,15 +135,18 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
   const budgetProfile = opts.budget ?? CLI_BUDGET;
 
   const specSchema = z.object({
-    model: z
-      .enum(["grok", "gemini", "openai", "sonnet"])
-      .describe(
-        "Backend for this spec. 'grok' (xAI direct, grok-4.6) — contrarian; grounded:true searches X " +
-          "(+web if include_web). 'gemini' (Gemini Flash latest) — strong reasoning + best live web grounding. " +
-          "'openai' (OpenRouter, GPT Sol latest) — third-family voice. " +
-          "'sonnet' (Sonnet latest) — Claude seat, sent medium. Sonnet 5.5 at medium is faster, more capable, and cheaper per task than Sonnet 5 at high. " +
-          "openai/sonnet: no native web/X grounding (grounded:true errors).",
-      ),
+    model: z.preprocess(
+      normalizePanelModel,
+      z
+        .enum(["grok", "argon", "openai", "sonnet"])
+        .describe(
+          "Backend for this spec. 'grok' (xAI direct, grok-4.6) — contrarian; grounded:true searches X " +
+            "(+web if include_web). 'argon' (Gemini 4 Argon) — strong reasoning + best live web grounding. " +
+            "'openai' (OpenRouter, GPT Sol latest) — third-family voice. " +
+            "'sonnet' (Sonnet latest) — Claude seat, sent medium. Sonnet 5.5 at medium is faster, more capable, and cheaper per task than Sonnet 5 at high. " +
+            "openai/sonnet: no native web/X grounding (grounded:true errors).",
+        ),
+    ),
     prompt: z
       .string()
       .refine((s) => s.trim().length > 0, { message: "prompt must not be empty or whitespace-only" })
@@ -170,7 +179,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .describe(
         "Advanced: override the exact model id (grok-*, gemini-*, OpenRouter openai/* or anthropic/* slug). " +
           "Omit unless you know the exact slug — server defaults are almost always right " +
-          "(openai→GPT Sol latest, sonnet→Sonnet latest, gemini→Gemini Flash latest).",
+          "(openai→GPT Sol latest, sonnet→Sonnet latest, argon→Gemini 4 Argon).",
       ),
   });
 
@@ -179,7 +188,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     {
       title: "Ask Panel (multi-model)",
       description:
-        "One question, many models. Leave specs EMPTY to auto-fill at most four, once: Gemini Flash latest, " +
+        "One question, many models. Leave specs EMPTY to auto-fill at most four, once: Gemini 4 Argon, " +
         "GPT Sol latest, Sonnet latest, then openrouter/auto-beta. The classifier picks 1–4. " +
         "Pass min_perspectives to ask for more, up to 8; past four that same four repeats. " +
         "OR name models in specs and those seats answer the same prompt (a spec prompt overrides that one seat). " +
@@ -205,7 +214,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         synthesize: z
           .boolean()
           .optional()
-          .describe("true → ONE merged answer (judge = gemini-flash-latest). Default false → raw labeled answers. (research_fanout's synthesize defaults to the opposite, true.)"),
+          .describe("true → ONE merged answer (judge = gemini-4-argon). Default false → raw labeled answers. (research_fanout's synthesize defaults to the opposite, true.)"),
         system: z
           .string()
           .optional()
@@ -335,6 +344,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           timed_out?: boolean;
           failover_fired?: boolean;
           model_slug?: string;
+          served_tier?: string;
         }) => {
           if (recorded) return;
           recorded = true;
@@ -361,6 +371,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             ),
             question_hash: qHash,
             prompt_preview: process.env.METRICS_LOG_PROMPTS === "1" ? spec.prompt : undefined,
+            served_tier: extra.served_tier,
           });
         };
 
@@ -419,7 +430,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           if (isOrOnlyWeightsModel(model)) {
             if (spec.grounded) {
               const msg =
-                `${model} seat has no native web/X grounding — use model:'gemini' grounded:true ` +
+                `${model} seat has no native web/X grounding — use model:'argon' grounded:true ` +
                 "(web) or model:'grok' grounded:true (X), or drop grounded for weights-only.";
               record(false, { error: msg, transport: "or", model_slug: defaultSlug });
               throw new Error(msg);
@@ -434,6 +445,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
                 citations: r.citations,
                 transport: "or",
                 model_slug: defaultSlug,
+                served_tier: r.service_tier,
               });
               return { text: r.text, citations: r.citations, transport: "or" as const };
             } catch (e) {
@@ -490,7 +502,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
 
           /** Run one transport with the zero-citation fail-loud retry contract. */
           const runWithGroundingContract = async (
-            once: () => Promise<{ text: string; citations: string[] }>,
+            once: () => Promise<GeminiResult>,
             pathLabel: string,
           ) => {
             let r = await once();
@@ -522,7 +534,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           try {
             let transport: "or" | "direct" = geminiTransport === "openrouter" ? "or" : "direct";
             let failover_fired = false;
-            let r: { text: string; citations: string[] };
+            let r: GeminiResult;
 
             if (geminiTransport === "openrouter") {
               try {
@@ -548,7 +560,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
               r = await runWithGroundingContract(callDirectOnce, "direct");
             }
 
-            record(true, { text: r.text, citations: r.citations, transport, failover_fired });
+            record(true, { text: r.text, citations: r.citations, transport, failover_fired, served_tier: r.service_tier });
             return { text: r.text, citations: r.citations, failover_fired, transport };
           } catch (e) {
             const msg = (e as Error)?.message ?? String(e);

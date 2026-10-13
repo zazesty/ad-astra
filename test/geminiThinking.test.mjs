@@ -11,6 +11,8 @@ function check(name, cond) {
 
 check("flash-latest thinks", geminiHonorsThinking("~google/gemini-flash-latest"));
 check("direct flash-latest thinks", geminiHonorsThinking("gemini-flash-latest"));
+check("argon thinks", geminiHonorsThinking("google/gemini-4-argon"));
+check("direct argon thinks", geminiHonorsThinking("gemini-4-argon"));
 check("3.8 flash thinks", geminiHonorsThinking("gemini-3.8-flash"));
 check("pro-latest thinks", geminiHonorsThinking("gemini-pro-latest"));
 check("flash-lite does not", !geminiHonorsThinking("google/gemini-3.5-flash-lite"));

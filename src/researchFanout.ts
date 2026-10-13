@@ -57,6 +57,8 @@ export type LegResult = {
   latency_ms: number;
   error?: string;
   transport?: "or" | "direct";
+  /** OpenRouter response service_tier. Absent on timeout, direct, or upstream null. */
+  served_tier?: string;
 };
 
 type RegisterOpts = {
@@ -250,6 +252,7 @@ async function runLeg(
       degraded: !ok,
       error_class: classifyError(leg.status === "timeout" ? "timeout" : ok ? "ok" : "error", leg.error),
       question_hash: qHash,
+      served_tier: leg.served_tier,
     });
   };
 
@@ -291,6 +294,7 @@ async function runLeg(
             citations: r.citations || [],
             transport: opts.geminiTransport === "openrouter" ? "or" : "direct",
             latency_ms: Date.now() - t0,
+            served_tier: r.service_tier,
           };
         }
 
@@ -364,17 +368,18 @@ async function synthesize(
     "Surface disagreements explicitly. Do not invent citations. Do not drop all sources.";
   const user = `Original question:\n${prompt}\n\nEvidence legs:\n${blocks}`;
 
-  // Synth can exceed the default 15s OR attempt abort (high-effort merge).
+  // Synth can exceed the default 15s OR attempt abort. Medium: Argon high
+  // missed the chat abort on the 2026-10-13 bakeoff.
   const attemptMs = Math.min(Math.max(budgetMs - 200, 5_000), 55_000);
   const r = await withTimeout(
     geminiTransport === "openrouter" || !geminiClient
       ? callOpenRouter(openrouterApiKey, DEFAULT_OPENROUTER_GEMINI_MODEL, user, {
           system: sys,
-          reasoning_effort: "high",
+          reasoning_effort: "medium",
           grounded: false,
           attempt_timeout_ms: attemptMs,
         })
-      : callGemini(geminiClient, user, { system: sys, reasoning_effort: "high", grounded: false }),
+      : callGemini(geminiClient, user, { system: sys, reasoning_effort: "medium", grounded: false }),
     budgetMs,
     "research_fanout synth",
   );
@@ -408,7 +413,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
         "timeout/shallow routing; " +
         "(4) trivial textbook constants (\"boiling point of water\") → may " +
         "grounding_miss fail-loud with degraded:true and no answer (by design, not a bug). " +
-        "FLOW: decompose ≤max_legs → parallel provider-core legs (default Gemini Flash latest, web-grounded; " +
+        "FLOW: decompose ≤max_legs → parallel provider-core legs (default Gemini 4 Argon, web-grounded; " +
         "optional grok_x / grok_grounded; no nested tools) → synth merges + citation union " +
         "OR synthesize:false returns raw legs. Legs fail independently; partial return + " +
         "degraded/slots_status. Hard ~85s outer budget; healthy complex runs often ~30–45s; " +

@@ -392,7 +392,7 @@ export async function summarize(userPrompt: string, deps: SummarizeDeps): Promis
   const geminiOpts = {
     system: COMPRESSION_SYSTEM,
     grounded: false,
-    reasoning_effort: "high" as const,
+    reasoning_effort: "medium" as const,
     attempt_timeout_ms: OR_NEWS_DIGEST_ATTEMPT_TIMEOUT_MS,
   };
   // Try Gemini first (matches ask_panel's transport selection).

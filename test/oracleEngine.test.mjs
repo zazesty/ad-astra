@@ -200,7 +200,7 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   const sonnet = s.find((x) => /sonnet|claude/i.test(x.model_slug));
   ok(gpt && gpt.reasoning_effort === "medium", "classifier high caps GPT at medium");
   ok(sonnet && sonnet.reasoning_effort === "medium", "classifier high caps Sonnet at medium");
-  ok(gem && gem.reasoning_effort === "high", "classifier high still reaches gemini");
+  ok(gem && gem.reasoning_effort === "medium", "classifier high caps Argon at medium");
 }
 {
   const s = buildSlots(C({ reasoning_effort: "low", suggested_panel_n: 2 }), {});

@@ -29,35 +29,38 @@
 
 import { GoogleGenAI, ServiceTier, ThinkingLevel } from "@google/genai";
 
-export const DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
-// OpenRouter floating alias — "always redirects to the latest Gemini Flash".
-// Matches the direct path's `gemini-flash-latest`. The leading "~" is part of
-// the real API slug (a bare "google/gemini-flash-latest" 400s, same as pro did).
-export const DEFAULT_OPENROUTER_GEMINI_MODEL = "~google/gemini-flash-latest";
+export const DEFAULT_GEMINI_MODEL = "gemini-4-argon";
+// Stable id. Argon is not a floating alias, so it does not take the "~"
+// that `~google/gemini-flash-latest` and `~google/gemini-pro-latest` required.
+export const DEFAULT_OPENROUTER_GEMINI_MODEL = "google/gemini-4-argon";
 
 /**
- * Gemini 3 Flash and Pro accept thinking levels. Flash-Lite stays on its own
- * minimal default (the classifier). Gemini 2.5 Flash 400s on thinkingLevel.
+ * Gemini 3 Flash, Pro, and Gemini 4 Argon accept thinking levels. Flash-Lite
+ * stays on its own minimal default (the classifier). Gemini 2.5 Flash 400s
+ * on thinkingLevel.
  */
 export function geminiHonorsThinking(model: string): boolean {
   if (!/gemini/i.test(model)) return false;
   if (/lite/i.test(model)) return false;
   if (/2\.5/.test(model)) return false;
-  return /flash/i.test(model) || /pro-latest/i.test(model) || /-pro\b/i.test(model);
+  return /flash/i.test(model) || /argon/i.test(model) || /pro-latest/i.test(model) || /-pro\b/i.test(model);
 }
 
 /**
  * Effort actually attached to a request.
- * Gemini Flash/Pro (and the bare panel model "gemini", which resolves to Flash)
- * send high when the caller omits it. Sonnet sends medium: Sonnet 5.5's own
- * default is high, and medium is our seat default. Sonnet 5.5 at medium is
- * faster, more capable, and cheaper per task than Sonnet 5 at high. An explicit
- * request always wins. Every other family omits the field.
+ * Argon, and the bare panel tokens "argon" and "gemini" (that seat), send medium when the
+ * caller omits it. High on Argon ran a 48.5s median on 2026-10-13, past the
+ * 40s chat abort. Flash/Pro still send high when omitted. Sonnet sends
+ * medium: Sonnet 5.5's own default is high, and medium is our seat default.
+ * Sonnet 5.5 at medium is faster, more capable, and cheaper per task than
+ * Sonnet 5 at high. An explicit request always wins. Every other family
+ * omits the field.
  */
 export function wireReasoningEffort(modelSlug: string | undefined, requested?: string): string | undefined {
   if (requested) return requested;
   const s = modelSlug ?? "";
-  if (s === "gemini" || geminiHonorsThinking(s)) return "high";
+  if (/argon/i.test(s) || s === "gemini") return "medium";
+  if (geminiHonorsThinking(s)) return "high";
   if (/sonnet|claude/i.test(s)) return "medium";
   return undefined;
 }
@@ -158,6 +161,21 @@ export interface CallGeminiOpts {
 export interface GeminiResult {
   text: string;
   citations: string[];
+  /**
+   * Tier OpenRouter says served this response. A Sol `fast` request that hit
+   * comes back `priority`. A shed comes back `default`. Absent when upstream
+   * sent null or this was not an OpenRouter response.
+   */
+  service_tier?: string;
+}
+
+/** Chat Completions puts service_tier on the response. Usage is the fallback. */
+export function servedServiceTier(data: any): string | undefined {
+  const raw = data?.service_tier ?? data?.usage?.service_tier;
+  if (typeof raw !== "string") return undefined;
+  const s = raw.trim().toLowerCase();
+  if (!s || s === "null" || s.length > 32) return undefined;
+  return s;
 }
 
 export type GeminiClient = GoogleGenAI;
@@ -271,10 +289,11 @@ export interface CallOpenRouterOpts {
  *     gemini slug. `grounded` on a non-gemini slug is a no-op + a loud warning —
  *     OR serves Grok as plain chat, so a grounded grok request would SILENTLY
  *     lose grounding; we surface it instead.
- *   - Reasoning effort: Gemini Flash/Pro get high when the field is omitted.
- *     Sonnet is sent medium. GPT, Grok, auto, and fusion omit the field
- *     (Sol's own default is medium; Grok's own default is high).
- *     Gemini 2.5 Flash still 400s on thinkingLevel, so it is excluded.
+ *   - Reasoning effort: Argon gets medium when the field is omitted (high
+ *     misses the chat abort). Flash/Pro still get high. Sonnet is sent
+ *     medium. GPT, Grok, auto, and fusion omit the field (Sol's own default
+ *     is medium; Grok's own default is high). Gemini 2.5 Flash still 400s
+ *     on thinkingLevel, so it is excluded.
  *   - Service tier: Gemini sends "priority". Sol-family slugs send "fast"
  *     (same OpenRouter preference: priority endpoints first, then default,
  *     billed as served). Anthropic speed and xAI priority stay off.
@@ -387,10 +406,13 @@ export async function callOpenRouter(
     // Observability: model OpenRouter actually served (the floating alias can flip;
     // keeps the gemini-model-check guard meaningful here too), plus the grounding
     // signal the fail-loud contract keys off. journald only.
+    // tier= is what we asked. served= is what the response reports. A Sol fast
+    // hit is served=priority. A shed is served=default. served=- means the
+    // body had no tier.
     console.error(
       `[callOpenRouter] requested=${model} resolved=${data?.model ?? "?"} ` +
         `grounded=${!!(opts.grounded && isGemini)} effort=${supportsEffort ? effort : "n/a"} ` +
-        `tier=${serviceTier} ms=${ms} ` +
+        `tier=${serviceTier} served=${result.service_tier ?? "-"} ms=${ms} ` +
         `attempt=${attempt} finish=${data?.choices?.[0]?.finish_reason ?? "?"} citations=${result.citations.length}`,
     );
     return result;
@@ -400,8 +422,8 @@ export async function callOpenRouter(
 /**
  * Thin back-compat alias over callOpenRouter — preserves the exact signature
  * ask_panel and newsDigest already call. Resolves the slug from opts.model the
- * way the old function did (bare slug → google/ namespace; default = the
- * floating gemini-flash alias), then delegates. Do NOT remove: it keeps panel.ts /
+ * way the old function did (bare slug → google/ namespace; default = Gemini
+ * 4 Argon), then delegates. Do NOT remove: it keeps panel.ts /
  * newsDigest.ts untouched through the ask_oracle migration.
  */
 export async function callGeminiViaOpenRouter(
@@ -429,5 +451,6 @@ export function extractOpenRouterResult(data: any): GeminiResult {
     const u = a?.url_citation?.url ?? a?.url;
     if (u) citations.push(u);
   }
-  return { text, citations };
+  const service_tier = servedServiceTier(data);
+  return service_tier ? { text, citations, service_tier } : { text, citations };
 }

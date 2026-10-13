@@ -9,10 +9,13 @@ export type MetricsTool = "oracle" | "panel" | "research_fanout";
 // Gemini rows in this log through 2026-09-20 are Gemini Pro
 // (~google/gemini-pro-latest, or the panel slug "gemini" which resolved to it).
 // Gemini Flash latest, with priority requested on Google calls, starts 2026-09-27.
-// Do not pool the two eras for latency or reliability.
+// Gemini 4 Argon replaces that Flash pin on 2026-10-13. Do not pool eras.
 // Sol fast is on (2026-10-03 reopen): OpenAI Sol slugs send service_tier "fast"
 // from callOpenRouter. Anthropic speed:fast and xAI priority stay scrubbed.
 // Gemini keeps service_tier "priority". Do not add the scrubbed tiers back.
+// served_tier (2026-10-13) is the OpenRouter response field, not the request.
+// A Sol fast hit is "priority". A shed is "default". Absent means no response
+// tier (timeout, or upstream null).
 export interface SeatMetricRecord {
   ts: string;
   tool: MetricsTool;
@@ -33,6 +36,8 @@ export interface SeatMetricRecord {
   error_class?: string;
   question_hash: string;
   prompt_preview?: string;
+  /** OpenRouter response service_tier. Sol fast hit = "priority". */
+  served_tier?: string;
 }
 
 function stateDir(): string {
@@ -46,8 +51,8 @@ function metricsPathForDate(d: Date): string {
 
 /**
  * Effort written to the seat log. An explicit level is that level. When the
- * caller omits it, Gemini Flash/Pro is high because we send high, and Sonnet
- * is medium because we send medium. Grok is high and GPT is medium because
+ * caller omits it, Argon (and the bare "gemini" seat token) is medium, Flash/Pro
+ * is high, and Sonnet is medium. Grok is high and GPT is medium because
  * those are the provider defaults we leave in place by not attaching the field.
  */
 export function loggedReasoningEffort(modelSlug: string | undefined, requested?: string): string {
@@ -68,7 +73,7 @@ export function familyFromSlug(modelSlug: string, provider?: string): string {
   const s = modelSlug.toLowerCase();
   if (s.includes("fusion")) return "fusion";
   if (s === "grok" || provider === "grok-direct" || s.includes("grok")) return "grok";
-  if (s.includes("gemini")) return "gemini";
+  if (s.includes("gemini") || s.includes("argon")) return "gemini";
   if (s.includes("gpt") || s.includes("openai")) return "openai";
   if (s.includes("claude") || s.includes("anthropic") || s === "opus" || s === "sonnet") return "claude";
   if (s.includes("auto")) return "auto";

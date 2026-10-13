@@ -31,7 +31,9 @@ console.log("Unit: metrics");
 
 check("hashQuestion stable", hashQuestion("hello").length === 16);
 check("omitted flash logs high", loggedReasoningEffort("~google/gemini-flash-latest", undefined) === "high");
-check("omitted bare gemini logs high", loggedReasoningEffort("gemini", undefined) === "high");
+check("omitted argon logs medium", loggedReasoningEffort("google/gemini-4-argon", undefined) === "medium");
+check("omitted bare gemini logs medium", loggedReasoningEffort("gemini", undefined) === "medium");
+check("omitted argon token logs medium", loggedReasoningEffort("argon", undefined) === "medium");
 check("omitted sonnet logs medium", loggedReasoningEffort("~anthropic/claude-sonnet-latest", undefined) === "medium");
 check("explicit sonnet high stays high", loggedReasoningEffort("~anthropic/claude-sonnet-latest", "high") === "high");
 check("omitted sol logs medium", loggedReasoningEffort("~openai/gpt-sol-latest", undefined) === "medium");
@@ -41,6 +43,8 @@ check("explicit medium stays medium", loggedReasoningEffort("grok", "medium") ==
 check("explicit low stays low", loggedReasoningEffort("~openai/gpt-sol-latest", "low") === "low");
 check("familyFromSlug grok", familyFromSlug("grok", "grok-direct") === "grok");
 check("familyFromSlug gemini", familyFromSlug("~google/gemini-pro-latest") === "gemini");
+check("familyFromSlug argon token", familyFromSlug("argon") === "gemini");
+check("familyFromSlug argon slug", familyFromSlug("google/gemini-4-argon") === "gemini");
 check("familyFromSlug fusion", familyFromSlug("openrouter/fusion") === "fusion");
 check("familyFromSlug claude opus", familyFromSlug("anthropic/claude-opus-5") === "claude");
 check("familyFromSlug claude sonnet", familyFromSlug("anthropic/claude-sonnet-5") === "claude");
