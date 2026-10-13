@@ -55,12 +55,12 @@ import { CLI_BUDGET, type BudgetProfile } from "./budgetProfile.js";
 
 /** OR-only panel families with no native web/X grounding. */
 function isOrOnlyWeightsModel(model: string): boolean {
-  return model === "openai" || model === "opus" || model === "sonnet";
+  return model === "sol" || model === "opus" || model === "sonnet";
 }
 
 function defaultOrSlug(model: string, modelSlug?: string): string {
   if (modelSlug) return modelSlug;
-  if (model === "openai") return GPT_OPENROUTER_SLUG;
+  if (model === "sol") return GPT_OPENROUTER_SLUG;
   if (model === "opus") return CLAUDE_OPUS_OPENROUTER_SLUG;
   if (model === "sonnet") return CLAUDE_SONNET_OPENROUTER_SLUG;
   return model;
@@ -68,7 +68,8 @@ function defaultOrSlug(model: string, modelSlug?: string): string {
 
 function familyForSpec(model: string, slug: string): string {
   if (model === "grok") return "grok";
-  if (model === "openai") return "openai";
+  // Public token is sol. Seat rows stay family openai so the log does not split.
+  if (model === "sol") return "openai";
   if (model === "opus" || model === "sonnet") return "claude";
   return familyFromSlug(slug);
 }
@@ -81,9 +82,11 @@ type RegisterOpts = {
   budget?: BudgetProfile;
 };
 
-/** Public enum is argon. A stale caller that still sends gemini runs the same seat. */
+/** Public enum is argon and sol. Stale gemini and openai tokens still run those seats. */
 export function normalizePanelModel(model: unknown): unknown {
-  return model === "gemini" ? "argon" : model;
+  if (model === "gemini") return "argon";
+  if (model === "openai") return "sol";
+  return model;
 }
 
 /** Opus is gone from the schema. A stale caller, or an opus model_slug, still runs sonnet. */
@@ -138,13 +141,13 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     model: z.preprocess(
       normalizePanelModel,
       z
-        .enum(["grok", "argon", "openai", "sonnet"])
+        .enum(["grok", "argon", "sol", "sonnet"])
         .describe(
           "Backend for this spec. 'grok' (xAI direct, grok-4.6) — contrarian; grounded:true searches X " +
             "(+web if include_web). 'argon' (Gemini 4 Argon) — strong reasoning + best live web grounding. " +
-            "'openai' (OpenRouter, GPT Sol latest) — third-family voice. " +
+            "'sol' (OpenRouter, GPT Sol latest) — third-family voice. " +
             "'sonnet' (Sonnet latest) — Claude seat, sent medium. Sonnet 5.5 at medium is faster, more capable, and cheaper per task than Sonnet 5 at high. " +
-            "openai/sonnet: no native web/X grounding (grounded:true errors).",
+            "sol/sonnet: no native web/X grounding (grounded:true errors).",
         ),
     ),
     prompt: z
@@ -162,7 +165,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .describe(
         "Back the answer with LIVE retrieval. For ANYTHING factual/current set true. " +
           "Gemini → Google Search; Grok → X (+web if include_web), auto mode (search only if needed). " +
-          "openai/sonnet → not supported (errors). Default false.",
+          "sol/sonnet → not supported (errors). Default false.",
       ),
     include_web: z
       .boolean()
@@ -179,7 +182,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .describe(
         "Advanced: override the exact model id (grok-*, gemini-*, OpenRouter openai/* or anthropic/* slug). " +
           "Omit unless you know the exact slug — server defaults are almost always right " +
-          "(openai→GPT Sol latest, sonnet→Sonnet latest, argon→Gemini 4 Argon).",
+          "(sol→GPT Sol latest, sonnet→Sonnet latest, argon→Gemini 4 Argon).",
       ),
   });
 
@@ -379,7 +382,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           model === "grok"
             ? budgetProfile.panelGrokSeatMs
             : isOrOnlyWeightsModel(model)
-              ? (model === "openai" ? budgetProfile.panelOpenaiSeatMs : budgetProfile.panelClaudeSeatMs)
+              ? (model === "sol" ? budgetProfile.panelOpenaiSeatMs : budgetProfile.panelClaudeSeatMs)
               : budgetProfile.panelGeminiSeatMs;
         const budget = seatBudgetMs(panelT0, outerMs, seatCap);
         if (budget < 500) {
@@ -426,7 +429,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             }
           }
 
-          // openai / opus / sonnet — OpenRouter weights-only (no native web/X plugin).
+          // sol / opus / sonnet — OpenRouter weights-only (no native web/X plugin).
           if (isOrOnlyWeightsModel(model)) {
             if (spec.grounded) {
               const msg =

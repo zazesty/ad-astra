@@ -63,6 +63,8 @@ check(
 );
 check("gemini token normalizes to argon", normalizePanelModel("gemini") === "argon");
 check("argon token stays argon", normalizePanelModel("argon") === "argon");
+check("openai token normalizes to sol", normalizePanelModel("openai") === "sol");
+check("sol token stays sol", normalizePanelModel("sol") === "sol");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
