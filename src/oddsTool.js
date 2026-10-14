@@ -1,18 +1,29 @@
 /**
  * oddsTool.js — prediction-market odds for your (Node) MCP server.
  *
- * Polymarket + Kalshi, both LIVE, both read-only, NO API keys required.
- * Lookup: Polymarket via full-text /public-search; Kalshi via /events
- * (paginated, substring-matched on event title — Kalshi has no search API).
+ * Defaults: Polymarket + Kalshi. Both LIVE, read-only, no API keys.
+ * Optional (pass them in `sources`; not queried by default):
+ *   - Manifold — public /v0/search-markets. Play-money (mana), not USD.
+ *   - Metaculus — public questions page (the API requires an account token
+ *     we do not keep). Play-money community forecasts. Volume is the
+ *     forecaster count. Open binary and multiple-choice only; numeric and
+ *     date questions are omitted because their aggregate is not a probability.
  *
- * ESM module. If your server is CommonJS, swap `export` -> module.exports.
- * Needs Node 18+ (global fetch). Tested on Node 22.
+ * Every row is labeled money:"real"|"play" and volume_unit so mana and
+ * forecaster counts are never read as dollars.
  *
- * Standalone test:  node oddsTool.js "fed rate cut"
+ * ESM module. Needs Node 18+ (global fetch). Tested on Node 22.
+ *
+ * Standalone:  node oddsTool.js "fed rate cut" [salience] [polymarket,kalshi]
  */
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
 const KALSHI_API = "https://api.elections.kalshi.com/trade-api/v2";
+const MANIFOLD_API = "https://api.manifold.markets/v0";
+const METACULUS_WEB = "https://www.metaculus.com";
+
+export const ODDS_SOURCES = ["polymarket", "kalshi", "manifold", "metaculus"];
+export const DEFAULT_ODDS_SOURCES = ["polymarket", "kalshi"];
 
 import { readFileSync } from "node:fs";
 
@@ -27,20 +38,29 @@ import { readFileSync } from "node:fs";
 const _cache = new Map();
 const CACHE_TTL = 60_000;
 
-async function cachedGet(baseUrl, params) {
-  const qs = new URLSearchParams(params).toString();
-  const url = `${baseUrl}?${qs}`;
+async function cachedFetch(url, as, baseForError) {
   const now = Date.now();
   const hit = _cache.get(url);
   if (hit && now - hit.ts < CACHE_TTL) return hit.data;
   const resp = await fetch(url, {
     signal: AbortSignal.timeout(15_000),
-    headers: { "User-Agent": "odds-tool/1.0" },
+    headers: {
+      "User-Agent": "odds-tool/1.0",
+      Accept: as === "text" ? "text/html" : "application/json",
+    },
   });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${baseUrl}`);
-  const data = await resp.json();
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${baseForError || url.split("?")[0]}`);
+  const data = as === "text" ? await resp.text() : await resp.json();
   _cache.set(url, { ts: now, data });
   return data;
+}
+
+async function cachedGet(baseUrl, params) {
+  const qs = new URLSearchParams(
+    Object.fromEntries(Object.entries(params).filter(([, v]) => v != null)),
+  ).toString();
+  const url = qs ? `${baseUrl}?${qs}` : baseUrl;
+  return cachedFetch(url, "json", baseUrl);
 }
 
 function parseList(val) {
@@ -96,6 +116,8 @@ function marketFromGamma(m, eventSlug, eventTitle = "") {
   const slug = eventSlug || m.slug;
   return {
     source: "polymarket",
+    money: "real",
+    volume_unit: "usd",
     title: (m.question || eventTitle || "").trim(),
     probability: parseFloat(prices[0]),
     outcome: outcomes.length ? String(outcomes[0]) : "Yes",
@@ -152,12 +174,13 @@ async function fetchPolymarket(query, limit = 5) {
 // lower volume) were cut BEFORE salience could surface them. Fix: apply a volume
 // FLOOR to remove dead/untraded markets, then rank the survivors by SALIENCE at
 // selection time — so frontrunners enter the pool the aggregator sorts.
-function selectCandidates(markets, limit) {
+function selectCandidates(markets, limit, absoluteFloor = 1000) {
   if (!markets.length) return [];
   const maxVol = Math.max(...markets.map((m) => m.volume || 0));
-  // Relative floor (1% of the pool's top volume) adapts to tiny vs huge events;
-  // absolute floor ($1k) catches the case where everything is thinly traded.
-  const floor = Math.max(maxVol * 0.01, 1000);
+  // Relative floor (1% of the pool's top volume) adapts to tiny vs huge events.
+  // absoluteFloor is $1000 for USD venues, lower for mana and forecaster counts.
+  // If every row is under the floor, the unfiltered pool is kept.
+  const floor = Math.max(maxVol * 0.01, absoluteFloor);
   const live = markets.filter((m) => (m.volume || 0) >= floor);
   const pool = live.length ? live : markets; // never return empty if all are thin
   // Rank the SURVIVORS by salience, keep a generous slice for the aggregator.
@@ -184,6 +207,8 @@ function marketFromKalshi(m, ev) {
   const series = (ev.series_ticker || "").toLowerCase();
   return {
     source: "kalshi",
+    money: "real",
+    volume_unit: "usd",
     title: title.trim(),
     probability: prob,
     outcome: "Yes",
@@ -267,8 +292,247 @@ async function fetchKalshi(query, limit = 5) {
   return selectCandidates(merged, limit);
 }
 
+// ============================ Manifold ============================
+// Public, no key. Volume is mana (play-money), not USD.
+function manifoldMoney(token) {
+  const unit = String(token || "MANA").toLowerCase();
+  return { money: "play", volume_unit: unit === "mana" ? "mana" : unit };
+}
+
+function isoFromMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const d = new Date(n);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function rowFromManifoldBinary(m) {
+  if (m.isResolved || m.outcomeType !== "BINARY") return null;
+  const prob = Number(m.probability);
+  if (!Number.isFinite(prob)) return null;
+  return {
+    source: "manifold",
+    ...manifoldMoney(m.token),
+    title: String(m.question || "").trim(),
+    probability: prob,
+    outcome: "Yes",
+    volume: Number(m.volume) || 0,
+    liquidity: Number(m.totalLiquidity) || 0,
+    close_date: isoFromMs(m.closeTime),
+    url: m.url || null,
+  };
+}
+
+function rowsFromManifoldAnswers(full) {
+  const question = String(full.question || "").trim();
+  const money = manifoldMoney(full.token);
+  const close_date = isoFromMs(full.closeTime);
+  const rows = [];
+  for (const a of full.answers || []) {
+    const prob = Number(a.probability);
+    const outcome = String(a.text || "").trim();
+    if (!outcome || !Number.isFinite(prob)) continue;
+    rows.push({
+      source: "manifold",
+      ...money,
+      title: `${question} — ${outcome}`,
+      probability: prob,
+      outcome,
+      volume: Number(a.volume ?? full.volume) || 0,
+      liquidity: Number(a.totalLiquidity ?? full.totalLiquidity) || 0,
+      close_date,
+      url: full.url || null,
+    });
+  }
+  return rows;
+}
+
+async function fetchManifold(query, limit = 5) {
+  const scan = Math.min(50, Math.max(limit * 4, 15));
+  const data = await cachedGet(`${MANIFOLD_API}/search-markets`, {
+    term: query,
+    filter: "open",
+    sort: "most-popular",
+    limit: scan,
+  });
+  const list = Array.isArray(data) ? data : [];
+  const qTokens = contentTokens(query);
+  const rows = [];
+  const multi = [];
+  for (const m of list) {
+    if (m.isResolved) continue;
+    if (!titleMatchesQuery(m.question || "", qTokens)) continue;
+    if (m.outcomeType === "BINARY") {
+      const row = rowFromManifoldBinary(m);
+      if (row) rows.push(row);
+    } else if (m.outcomeType === "MULTIPLE_CHOICE" && m.id) {
+      multi.push(m);
+    }
+  }
+  multi.sort((a, b) => (Number(b.volume) || 0) - (Number(a.volume) || 0));
+  const fulls = await Promise.all(multi.slice(0, 4).map(async (m) => {
+    try {
+      return await cachedGet(`${MANIFOLD_API}/market/${encodeURIComponent(m.id)}`, {});
+    } catch {
+      return null;
+    }
+  }));
+  for (const full of fulls) {
+    if (!full || full.isResolved) continue;
+    rows.push(...rowsFromManifoldAnswers(full));
+  }
+  // 100 mana, not $1000: long-tail local markets are the reason this venue exists.
+  return selectCandidates(rows, limit, 100);
+}
+
+// ============================ Metaculus ===========================
+// The JSON API is authenticated-only. The public questions page embeds the
+// same post objects in a Next.js flight payload, including the community
+// aggregate. We read that page. No token.
+function nextFlightPayloads(html) {
+  const marker = 'self.__next_f.push([1,"';
+  const out = [];
+  let start = 0;
+  while (start < html.length) {
+    const i = html.indexOf(marker, start);
+    if (i < 0) break;
+    let j = i + marker.length;
+    let body = "";
+    while (j < html.length) {
+      const c = html[j];
+      if (c === "\\") {
+        body += c + (html[j + 1] ?? "");
+        j += 2;
+        continue;
+      }
+      if (c === '"') break;
+      body += c;
+      j += 1;
+    }
+    try {
+      const decoded = JSON.parse(`"${body}"`);
+      if (typeof decoded === "string") out.push(decoded);
+    } catch { /* one bad chunk should not drop the page */ }
+    start = j + 1;
+  }
+  return out;
+}
+
+function matchJsonObject(s, start) {
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let k = start; k < s.length; k++) {
+    const c = s[k];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{") depth += 1;
+    else if (c === "}") {
+      depth -= 1;
+      if (depth === 0) return s.slice(start, k + 1);
+    }
+  }
+  return null;
+}
+
+function postsFromFlight(raw) {
+  const posts = [];
+  const seen = new Set();
+  let from = 0;
+  while (from < raw.length) {
+    const i = raw.indexOf('"nr_forecasters"', from);
+    if (i < 0) break;
+    from = i + 16;
+    const start = raw.lastIndexOf('{"id":', i);
+    if (start < 0) continue;
+    const text = matchJsonObject(raw, start);
+    if (!text) continue;
+    let post;
+    try { post = JSON.parse(text); } catch { continue; }
+    if (!post || post.id == null || seen.has(post.id)) continue;
+    if (post.nr_forecasters == null || !post.question || !post.title) continue;
+    seen.add(post.id);
+    posts.push(post);
+  }
+  return posts;
+}
+
+function probRowsFromMetaculusPost(post) {
+  if (post.resolved || post.status !== "open") return [];
+  const q = post.question;
+  if (!q || q.resolution != null) return [];
+  const latest = q.aggregations?.recency_weighted?.latest
+    || q.aggregations?.metaculus_prediction?.latest;
+  const centers = latest?.centers;
+  if (!Array.isArray(centers) || !centers.length) return [];
+  const slug = post.slug || "";
+  const base = {
+    source: "metaculus",
+    money: "play",
+    volume_unit: "forecasters",
+    volume: Number(post.nr_forecasters) || 0,
+    liquidity: Number(latest.forecaster_count ?? post.forecasts_count) || 0,
+    close_date: post.scheduled_close_time ?? null,
+    url: `${METACULUS_WEB}/questions/${post.id}/${slug}`,
+  };
+  if (q.type === "binary" && centers.length === 1) {
+    const p = Number(centers[0]);
+    if (!Number.isFinite(p) || p < 0 || p > 1) return [];
+    return [{ ...base, title: String(post.title).trim(), probability: p, outcome: "Yes" }];
+  }
+  if (q.type === "multiple_choice" && Array.isArray(q.options) && q.options.length === centers.length) {
+    const title = String(post.title).trim();
+    const rows = [];
+    for (let n = 0; n < q.options.length; n++) {
+      const p = Number(centers[n]);
+      const outcome = String(q.options[n] || "").trim();
+      if (!outcome || !Number.isFinite(p) || p < 0 || p > 1) continue;
+      rows.push({ ...base, title: `${title} — ${outcome}`, probability: p, outcome });
+    }
+    return rows;
+  }
+  return [];
+}
+
+function marketsFromMetaculusHtml(html, query) {
+  if (typeof html !== "string" || !html.includes("__next_f.push")) {
+    throw new Error("metaculus: unexpected page");
+  }
+  const qTokens = contentTokens(query);
+  const seen = new Set();
+  const rows = [];
+  for (const raw of nextFlightPayloads(html)) {
+    for (const post of postsFromFlight(raw)) {
+      if (seen.has(post.id)) continue;
+      seen.add(post.id);
+      if (!titleMatchesQuery(post.title || "", qTokens)) continue;
+      rows.push(...probRowsFromMetaculusPost(post));
+    }
+  }
+  return rows;
+}
+
+async function fetchMetaculus(query, limit = 5) {
+  const url = `${METACULUS_WEB}/questions/?${new URLSearchParams({ search: query, status: "open" })}`;
+  const html = await cachedFetch(url, "text", `${METACULUS_WEB}/questions/`);
+  const rows = marketsFromMetaculusHtml(html, query);
+  // Forecaster counts are small. 5 keeps a lone thin question; the relative
+  // floor still drops noise when a heavily forecasted question is in the pool.
+  return selectCandidates(rows, limit, 5);
+}
+
 // =========================== Aggregator ===========================
-const PROVIDERS = { polymarket: fetchPolymarket, kalshi: fetchKalshi };
+const PROVIDERS = {
+  polymarket: fetchPolymarket,
+  kalshi: fetchKalshi,
+  manifold: fetchManifold,
+  metaculus: fetchMetaculus,
+};
 
 // Sort comparators (Bug 3). "salience" surfaces the informative markets — those
 // near a decision boundary — instead of <1% longshot tails that dominate by
@@ -279,12 +543,19 @@ const SORTERS = {
   volume: (a, b) => b.volume - a.volume,
 };
 
-export async function getOdds(query, limit = 5, sources = ["polymarket", "kalshi"], sort = "salience") {
+export async function getOdds(query, limit = 5, sources = DEFAULT_ODDS_SOURCES, sort = "salience") {
   const cmp = SORTERS[sort] || SORTERS.salience;
   const perVenue = {};
   const errors = {};
+  const wanted = [];
+  const seenSrc = new Set();
+  for (const name of sources || []) {
+    if (seenSrc.has(name)) continue;
+    seenSrc.add(name);
+    wanted.push(name);
+  }
 
-  for (const name of sources) {
+  for (const name of wanted) {
     const fn = PROVIDERS[name];
     if (!fn) { errors[name] = "unknown provider"; continue; }
     try {
@@ -320,13 +591,14 @@ export async function getOdds(query, limit = 5, sources = ["polymarket", "kalshi
 if (import.meta.url === `file://${process.argv[1]}`) {
   const q = process.argv[2] || "election";
   const sort = process.argv[3] || "salience";
-  getOdds(q, 6, ["polymarket", "kalshi"], sort).then((out) => {
+  const sources = (process.argv[4] || "polymarket,kalshi").split(",").map((s) => s.trim()).filter(Boolean);
+  getOdds(q, 6, sources, sort).then((out) => {
     console.log(`\nQuery: ${out.query}  (${out.count} markets, sort=${out.sort})\n`);
     for (const m of out.markets) {
       const pct = (m.probability * 100).toFixed(1) + "%";
-      const vol = "$" + Math.round(m.volume).toLocaleString("en-US");
+      const vol = Math.round(m.volume).toLocaleString("en-US");
       console.log(`  [${m.source}] ${m.title}`);
-      console.log(`      ${m.outcome}: ${pct}   ${vol}   closes ${m.close_date}`);
+      console.log(`      ${m.outcome}: ${pct}   ${vol} ${m.volume_unit} (${m.money})   closes ${m.close_date}`);
     }
     if (out.errors) console.log("errors:", out.errors);
   });

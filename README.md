@@ -12,7 +12,7 @@ transport per request.
   the others.
 - **`grok_x_search`** — citations-first live X search (xAI `/responses` + `x_search`),
   with a no-results-is-an-error contract.
-- **`get_odds`** — live Polymarket + Kalshi prediction-market odds.
+- **`get_odds`** — live prediction-market odds. Defaults: Polymarket + Kalshi (real money). Optional sources: Manifold (play-money mana) and Metaculus (community forecast, forecaster count).
 - **`get_news_digest`** — on-demand, *compressed* read of a curated RSS feed list
   (AI/frontier, macro/heterodox, light industry). Fetches the last N days, dedupes,
   has the LLM **compress** (not amplify) into a short digest, emails it once (Resend)

@@ -4,7 +4,7 @@ import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
-import { getOdds } from "./oddsTool.js";
+import { getOdds, DEFAULT_ODDS_SOURCES, ODDS_SOURCES } from "./oddsTool.js";
 import { registerAskPanel } from "./panel.js";
 import { registerNewsDigest } from "./newsDigest.js";
 
@@ -55,7 +55,7 @@ function buildServer(budget: BudgetProfile) {
     {
       title: "Get Odds",
       description:
-        "Current prediction-market odds for a topic. Full-text searches liquid markets and returns, per market: implied probability, outcome label, USD-normalized volume, liquidity, a resolution URL, and close_date. NOTE: close_date is the event/expiry date associated with the market, NOT the live trading cutoff — markets typically remain tradeable until resolution, so do not infer \"trading closed\" from a past close_date. Results sorted by salience. sources defaults to ['polymarket','kalshi'].",
+        "Current prediction-market odds for a topic. Each row has implied probability, outcome, volume, volume_unit, money (real or play), liquidity, a resolution URL, and close_date. close_date is the event or expiry date, not the live trading cutoff — markets usually stay tradeable until resolution, so do not infer \"trading closed\" from a past close_date. Default sources are polymarket and kalshi (real money, volume in USD). Optional, off unless named: manifold (play-money, volume in mana) and metaculus (play-money community forecast; volume is the forecaster count; open binary and multiple-choice only). To include an optional venue, pass the full sources list. Sorted by salience.",
       inputSchema: {
         query: z
           .string()
@@ -64,12 +64,15 @@ function buildServer(budget: BudgetProfile) {
           })
           .describe("Topic to search, e.g. 'fed rate cut', 'california governor primary'. Broader terms return more markets."),
         limit: z.number().int().min(1).max(25).optional().describe("Max markets to return (default 5)."),
-        sources: z.array(z.string()).optional().describe("Venues to query; default ['polymarket','kalshi']."),
+        sources: z
+          .array(z.enum(ODDS_SOURCES as unknown as [string, ...string[]]))
+          .optional()
+          .describe("Venues to query. Default ['polymarket','kalshi']. Opt in with a full list, e.g. ['polymarket','kalshi','manifold'] or ['metaculus']."),
       },
     },
     async ({ query, limit, sources }) => {
       try {
-        const result = await getOdds(query, limit ?? 5, sources ?? ["polymarket", "kalshi"]);
+        const result = await getOdds(query, limit ?? 5, sources ?? [...DEFAULT_ODDS_SOURCES]);
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
         return { content: [{ type: "text", text: `get_odds failed: ${(err as Error).message}` }], isError: true };
