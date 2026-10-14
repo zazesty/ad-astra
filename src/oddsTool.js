@@ -8,6 +8,8 @@
  *     we do not keep). Play-money community forecasts. Volume is the
  *     forecaster count. Open binary and multiple-choice only; numeric and
  *     date questions are omitted because their aggregate is not a probability.
+ *   - PredictIt — public /api/marketdata/all/. Real money (USD share price).
+ *     The feed does not publish volume, so volume and liquidity are null.
  *
  * Every row is labeled money:"real"|"play" and volume_unit so mana and
  * forecaster counts are never read as dollars.
@@ -21,8 +23,9 @@ const GAMMA_API = "https://gamma-api.polymarket.com";
 const KALSHI_API = "https://api.elections.kalshi.com/trade-api/v2";
 const MANIFOLD_API = "https://api.manifold.markets/v0";
 const METACULUS_WEB = "https://www.metaculus.com";
+const PREDICTIT_ALL = "https://www.predictit.org/api/marketdata/all/";
 
-export const ODDS_SOURCES = ["polymarket", "kalshi", "manifold", "metaculus"];
+export const ODDS_SOURCES = ["polymarket", "kalshi", "manifold", "metaculus", "predictit"];
 export const DEFAULT_ODDS_SOURCES = ["polymarket", "kalshi"];
 
 import { readFileSync } from "node:fs";
@@ -92,18 +95,26 @@ function contentTokens(text) {
 // stem relationship): "rate" is a prefix of "rates" -> match; "ceramica" is
 // NOT a prefix of "ceramics" (they diverge at the final char) -> no match.
 // Min length 4 on the shorter token keeps short coincidences out.
-function titleMatchesQuery(title, qTokens) {
+function tokenHits(q, tTokens) {
+  if (tTokens.has(q)) return true;
+  for (const t of tTokens) {
+    const [short, long] = q.length <= t.length ? [q, t] : [t, q];
+    if (short.length >= 4 && long.startsWith(short)) return true;
+  }
+  return false;
+}
+
+// mode "any" (default): one shared content token is enough. That is right for
+// venues where a volume floor then drops the noise.
+// mode "all": every content token must hit. PredictIt publishes no volume, so
+// a single shared word ("Republican") would let every coin-flip contract
+// outrank the market the query actually named.
+function titleMatchesQuery(title, qTokens, mode = "any") {
   if (!qTokens.length) return false;           // query was all noise -> fail closed
   const tTokens = new Set(contentTokens(title));
   if (!tTokens.size) return false;
-  for (const q of qTokens) {
-    if (tTokens.has(q)) return true;            // exact content-token hit
-    for (const t of tTokens) {                  // stem hit: shorter is prefix of longer
-      const [short, long] = q.length <= t.length ? [q, t] : [t, q];
-      if (short.length >= 4 && long.startsWith(short)) return true;
-    }
-  }
-  return false;
+  if (mode === "all") return qTokens.every((q) => tokenHits(q, tTokens));
+  return qTokens.some((q) => tokenHits(q, tTokens));
 }
 // ---------------------------------------------------------------------------
 
@@ -526,12 +537,72 @@ async function fetchMetaculus(query, limit = 5) {
   return selectCandidates(rows, limit, 5);
 }
 
+// ============================ PredictIt ===========================
+// Public read-only feed. One payload lists every open market. Real USD
+// share prices. No volume or open-interest field, so those stay null
+// rather than a fake dollar figure. Prices are already 0–1.
+function predictitProb(c) {
+  const bid = Number(c.bestSellYesCost);
+  const ask = Number(c.bestBuyYesCost);
+  if (bid > 0 && ask > 0) return (bid + ask) / 2;
+  const last = Number(c.lastTradePrice);
+  return Number.isFinite(last) ? last : null;
+}
+
+function predictitClose(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (!s || s === "NA" || s === "N/A") return null;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function rowsFromPredictitMarket(m, qTokens) {
+  const marketName = String(m.name || "").trim();
+  if (!marketName || (m.status && m.status !== "Open")) return [];
+  const contracts = Array.isArray(m.contracts) ? m.contracts : [];
+  const rows = [];
+  for (const c of contracts) {
+    if (c.status && c.status !== "Open") continue;
+    const outcomeName = String(c.name || c.shortName || "").trim();
+    if (!titleMatchesQuery(`${marketName} ${outcomeName}`, qTokens, "all")) continue;
+    const prob = predictitProb(c);
+    if (!Number.isFinite(prob) || prob < 0 || prob > 1) continue;
+    const single = contracts.length === 1;
+    const outcome = single ? "Yes" : outcomeName;
+    rows.push({
+      source: "predictit",
+      money: "real",
+      volume_unit: "usd",
+      title: single || !outcomeName ? marketName : `${marketName} — ${outcomeName}`,
+      probability: prob,
+      outcome: outcome || "Yes",
+      volume: null,
+      liquidity: null,
+      close_date: predictitClose(c.dateEnd),
+      url: m.url || null,
+    });
+  }
+  return rows;
+}
+
+async function fetchPredictit(query, limit = 5) {
+  const data = await cachedGet(PREDICTIT_ALL, {});
+  const markets = Array.isArray(data?.markets) ? data.markets : [];
+  const qTokens = contentTokens(query);
+  const rows = [];
+  for (const m of markets) rows.push(...rowsFromPredictitMarket(m, qTokens));
+  // No published volume, so a dollar floor would drop the whole pool.
+  return selectCandidates(rows, limit, 0);
+}
+
 // =========================== Aggregator ===========================
 const PROVIDERS = {
   polymarket: fetchPolymarket,
   kalshi: fetchKalshi,
   manifold: fetchManifold,
   metaculus: fetchMetaculus,
+  predictit: fetchPredictit,
 };
 
 // Sort comparators (Bug 3). "salience" surfaces the informative markets — those
@@ -540,7 +611,7 @@ const PROVIDERS = {
 const SORTERS = {
   salience: (a, b) => Math.abs(0.5 - a.probability) - Math.abs(0.5 - b.probability),
   probability: (a, b) => b.probability - a.probability,
-  volume: (a, b) => b.volume - a.volume,
+  volume: (a, b) => (b.volume || 0) - (a.volume || 0),
 };
 
 export async function getOdds(query, limit = 5, sources = DEFAULT_ODDS_SOURCES, sort = "salience") {

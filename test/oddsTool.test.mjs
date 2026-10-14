@@ -61,7 +61,7 @@ function metaPost(over) {
 console.log("Unit: get_odds sources");
 
 check("defaults stay polymarket+kalshi", DEFAULT_ODDS_SOURCES.join() === "polymarket,kalshi");
-check("optional venues are listed after the defaults", ODDS_SOURCES.join() === "polymarket,kalshi,manifold,metaculus");
+check("optional venues are listed after the defaults", ODDS_SOURCES.join() === "polymarket,kalshi,manifold,metaculus,predictit");
 
 installFetch((u) => {
   if (u.includes("gamma-api.polymarket.com/public-search")) {
@@ -107,7 +107,7 @@ check("default call returns polymarket and kalshi", defaults.markets.some((m) =>
 check("real-money rows are labeled usd", defaults.markets.every((m) => m.money === "real" && m.volume_unit === "usd"));
 const poly = defaults.markets.find((m) => m.source === "polymarket");
 check("probability parsed", poly && Math.abs(poly.probability - 0.62) < 1e-9);
-check("default does not call manifold or metaculus", calls.every((u) => !u.includes("manifold") && !u.includes("metaculus")));
+check("default does not call optional venues", calls.every((u) => !u.includes("manifold") && !u.includes("metaculus") && !u.includes("predictit")));
 
 installFetch((u) => {
   if (u.includes("/search-markets")) {
@@ -207,6 +207,59 @@ check("metaculus date question omitted", meta.markets.every((m) => !m.title.toLo
 check("metaculus resolved omitted", meta.markets.every((m) => !m.title.toLowerCase().includes("resolved")));
 check("metaculus url is the public question", meta.markets.some((m) => m.url === "https://www.metaculus.com/questions/38508/insurer-ai-code"));
 
+installFetch((u) => {
+  if (!u.includes("predictit.org/api/marketdata/all")) throw new Error("unexpected " + u);
+  return {
+    markets: [
+      {
+        id: 1,
+        name: "Will Mike Johnson remain Speaker of the House through the 119th Congress?",
+        url: "https://www.predictit.org/markets/detail/1",
+        status: "Open",
+        contracts: [{
+          name: "Will Mike Johnson remain Speaker of the House through the 119th Congress?",
+          status: "Open",
+          lastTradePrice: 0.95,
+          bestBuyYesCost: 0.95,
+          bestSellYesCost: 0.85,
+          dateEnd: "NA",
+        }],
+      },
+      {
+        id: 8153,
+        name: "Who will win the 2028 Democratic presidential nomination?",
+        url: "https://www.predictit.org/markets/detail/8153",
+        status: "Open",
+        contracts: [
+          { name: "Jon Ossoff", status: "Open", lastTradePrice: 0.2, bestBuyYesCost: 0.21, bestSellYesCost: 0.2, dateEnd: "NA" },
+          { name: "A. Ocasio-Cortez", status: "Open", lastTradePrice: 0.15, bestBuyYesCost: 0.17, bestSellYesCost: 0.15, dateEnd: "NA" },
+          { name: "Closed Person", status: "Closed", lastTradePrice: 0.5, bestBuyYesCost: 0.5, bestSellYesCost: 0.5, dateEnd: "NA" },
+        ],
+      },
+      {
+        id: 9,
+        name: "Will ceramics prices spike?",
+        status: "Open",
+        contracts: [{ name: "Yes", status: "Open", lastTradePrice: 0.4, bestBuyYesCost: 0.41, bestSellYesCost: 0.39, dateEnd: "NA" }],
+      },
+    ],
+  };
+});
+const speakerQ = await getOdds("Mike Johnson Speaker", 4, ["predictit"]);
+const speaker = speakerQ.markets.find((m) => m.title.includes("Speaker"));
+check("predictit single contract is real money, mid price, no fake volume",
+  speaker && speaker.money === "real" && speaker.volume_unit === "usd"
+  && speaker.outcome === "Yes" && speaker.volume === null && speaker.liquidity === null
+  && Math.abs(speaker.probability - 0.9) < 1e-9 && speaker.close_date === null);
+check("predictit requires every query word, so a speaker query skips the nomination",
+  speakerQ.markets.every((m) => !m.title.includes("presidential")));
+const pit = await getOdds("Democratic presidential nomination", 6, ["predictit"]);
+check("predictit multiple-choice expands and drops closed contracts",
+  pit.markets.some((m) => m.outcome === "Jon Ossoff" && Math.abs(m.probability - 0.205) < 1e-9)
+  && pit.markets.every((m) => m.outcome !== "Closed Person"));
+check("unrelated predictit market dropped", pit.markets.every((m) => !m.title.toLowerCase().includes("ceramics")));
+check("no predictit errors", !speakerQ.errors && !pit.errors);
+
 installFetch(() => ({ __html: "<html>no flight</html>" }));
 const bad = await getOdds("AI broken unique-meta-page", 3, ["metaculus"]);
 check("unexpected metaculus page is an error, not an empty success", Boolean(bad.errors?.metaculus) && bad.markets.length === 0);
@@ -221,8 +274,8 @@ const mixed = await getOdds("fed rate unique-mixed", 3, ["manifold", "polymarket
 check("duplicate sources are queried once", calls.filter((u) => u.includes("manifold")).length === 1);
 check("one venue failing leaves the other", mixed.markets.length === 0 && mixed.errors?.manifold && !mixed.errors.polymarket);
 
-const unknown = await getOdds("fed rate unique-unknown", 2, ["polymarket", "predictit"]);
-check("unknown venue is reported", unknown.errors?.predictit === "unknown provider");
+const unknown = await getOdds("fed rate unique-unknown", 2, ["polymarket", "forecastex"]);
+check("unknown venue is reported", unknown.errors?.forecastex === "unknown provider");
 
 globalThis.fetch = realFetch;
 console.log(`\n${pass} passed, ${fail} failed`);

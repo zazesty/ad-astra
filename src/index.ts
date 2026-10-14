@@ -55,7 +55,7 @@ function buildServer(budget: BudgetProfile) {
     {
       title: "Get Odds",
       description:
-        "Current prediction-market odds for a topic. Each row has implied probability, outcome, volume, volume_unit, money (real or play), liquidity, a resolution URL, and close_date. close_date is the event or expiry date, not the live trading cutoff — markets usually stay tradeable until resolution, so do not infer \"trading closed\" from a past close_date. Default sources are polymarket and kalshi (real money, volume in USD). Optional, off unless named: manifold (play-money, volume in mana) and metaculus (play-money community forecast; volume is the forecaster count; open binary and multiple-choice only). To include an optional venue, pass the full sources list. Sorted by salience.",
+        "Current prediction-market odds for a topic. Each row has implied probability, outcome, volume, volume_unit, money (real or play), liquidity, a resolution URL, and close_date. close_date is the event or expiry date, not the live trading cutoff — markets usually stay tradeable until resolution, so do not infer \"trading closed\" from a past close_date. Default sources are polymarket and kalshi (real money, volume in USD). Optional, off unless named: manifold (play-money, volume in mana), metaculus (play-money community forecast; volume is the forecaster count; open binary and multiple-choice only), and predictit (real money, US politics; the feed publishes no volume, so volume and liquidity are null). To include an optional venue, pass the full sources list. Sorted by salience.",
       inputSchema: {
         query: z
           .string()
@@ -67,7 +67,7 @@ function buildServer(budget: BudgetProfile) {
         sources: z
           .array(z.enum(ODDS_SOURCES as unknown as [string, ...string[]]))
           .optional()
-          .describe("Venues to query. Default ['polymarket','kalshi']. Opt in with a full list, e.g. ['polymarket','kalshi','manifold'] or ['metaculus']."),
+          .describe("Venues to query. Default ['polymarket','kalshi']. Opt in with a full list, e.g. ['polymarket','kalshi','manifold'] or ['predictit']."),
       },
     },
     async ({ query, limit, sources }) => {
