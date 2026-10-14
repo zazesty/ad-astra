@@ -12,6 +12,7 @@ import { registerMemoryTools, loadMemoryIndexRaw } from "./memory.js";
 import { loadLensesRaw } from "./lenses.js";
 import { registerGetMetrics } from "./metrics.js";
 import { registerResearchFanout } from "./researchFanout.js";
+import { registerStandingTodoAdd } from "./standingTodo.js";
 import {
   budgetProfileFromUserAgent,
   shortUserAgent,
@@ -104,6 +105,7 @@ function buildServer(budget: BudgetProfile) {
   // upsert / list. MCP is the single read/write authority.
   registerMemoryTools(server);
   registerGetMetrics(server);
+  registerStandingTodoAdd(server);
   registerResearchFanout(server, {
     xaiApiKey: XAI_API_KEY,
     geminiApiKey: GEMINI_API_KEY,

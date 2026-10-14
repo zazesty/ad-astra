@@ -16,6 +16,7 @@ export const MCP_TOOLS = [
   "memory_list",
   "get_metrics",
   "research_fanout",
+  "standing_todo_add",
 ] as const;
 
 export type McpToolName = (typeof MCP_TOOLS)[number];

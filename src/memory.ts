@@ -34,6 +34,7 @@ Whoever's turn it is does the extraction at end of substantive turns.
 6. On conflict: flag in content or via simple status in response; never silent overwrite.
 7. Substance-gated. Cheap. MCP tools are the authority.
 8. During upsert, [[slugs]] in body are auto-added to related[].
+9. Open work is not a fact. Park it with standing_todo_add (or standing-todos.sh on the box). Do not memory_upsert a todo.
 
 **NOTE:** \`MEMORY.md\` and \`index.md\` are auto-regenerated on every \`memory_upsert\`
 from each fact's frontmatter ([[memory-system-structure]]).
@@ -673,7 +674,7 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Upsert",
       description:
-        "Create or update a fact in the shared MCP memory KB. On update: omitted fields are preserved; any field you pass completely replaces the previous value (tags/related arrays are replaced, not unioned — send the full desired set). Bumps updated + version. Provide clean markdown body only (no --- frontmatter block). If editing a fact retrieved via memory_retrieve, strip the frontmatter it returned before sending. This is the only write path for durable facts. COLLISION: keyed by EXACT id (input.id, else input.name; kebab-case by convention — NOT auto-slugified). An existing id updates/merges in place; a near-duplicate id creates a SEPARATE fact — there is no fuzzy dedup, so memory_search first to avoid clobbering or duplicating a fact.",
+        "Create or update a fact in the shared MCP memory KB. On update: omitted fields are preserved; any field you pass completely replaces the previous value (tags/related arrays are replaced, not unioned — send the full desired set). Bumps updated + version. Provide clean markdown body only (no --- frontmatter block). If editing a fact retrieved via memory_retrieve, strip the frontmatter it returned before sending. This is the only write path for durable facts. Open work is not a fact: use standing_todo_add for a todo, reminder, or parking slip, never this tool. COLLISION: keyed by EXACT id (input.id, else input.name; kebab-case by convention — NOT auto-slugified). An existing id updates/merges in place; a near-duplicate id creates a SEPARATE fact — there is no fuzzy dedup, so memory_search first to avoid clobbering or duplicating a fact.",
       inputSchema: {
         id: z.string().optional().describe("Optional explicit id/slug. Defaults to sanitized `name`."),
         name: z
