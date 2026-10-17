@@ -3,8 +3,9 @@
  * Wraps standing-todos.sh. No list, done, note, or delete.
  *
  * grok-mcp.service has ProtectHome=read-only, so the unit sets
- * STANDING_TODOS_INPLACE=1 and whitelists only standing-todos.json.
- * The script then overwrites that file instead of creating a sibling temp.
+ * STANDING_TODOS_INPLACE=1 and whitelists only the standing-todos directory
+ * (a file whitelist is dropped if the file is missing at process start).
+ * The script overwrites the board instead of creating a sibling temp.
  */
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";

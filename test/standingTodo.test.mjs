@@ -2,7 +2,7 @@
  * standing_todo_add: add-only wrapper around standing-todos.sh.
  *   node test/standingTodo.test.mjs
  */
-import { mkdtemp, readFile, rm, writeFile, access } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, access, mkdir, symlink, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addStandingTodo, normTitle, OPEN_ITEM_CAP } from "../build/standingTodo.js";
@@ -128,6 +128,35 @@ try {
     tmpLeft = false;
   }
   check("inplace leaves no temp", tmpLeft === false);
+
+  const realDir = join(dir, "realboard");
+  const linkDir = join(dir, "linkdir");
+  await mkdir(realDir);
+  await mkdir(linkDir);
+  const linkBoard = join(linkDir, "standing-todos.json");
+  await symlink(join(realDir, "standing-todos.json"), linkBoard);
+  const viaLink = await addStandingTodo({
+    title: "Through the symlink",
+    todosPath: linkBoard,
+    scriptPath: SCRIPT,
+  });
+  check("symlink add ok", viaLink.ok === true && viaLink.duplicate === false);
+  check("symlink survives atomic replace", (await lstat(linkBoard)).isSymbolicLink());
+  check("symlink target has the item", openItems(await load(join(realDir, "standing-todos.json"))).length === 1);
+
+  process.env.STANDING_TODOS_INPLACE = "1";
+  const viaLinkInplace = await addStandingTodo({
+    title: "Through the symlink inplace",
+    todosPath: linkBoard,
+    scriptPath: SCRIPT,
+  });
+  delete process.env.STANDING_TODOS_INPLACE;
+  check("symlink inplace add ok", viaLinkInplace.ok === true && viaLinkInplace.duplicate === false);
+  check("symlink survives inplace write", (await lstat(linkBoard)).isSymbolicLink());
+  check(
+    "symlink inplace target has both",
+    openItems(await load(join(realDir, "standing-todos.json"))).length === 2,
+  );
 } finally {
   delete process.env.STANDING_TODOS_INPLACE;
   await rm(dir, { recursive: true, force: true });
