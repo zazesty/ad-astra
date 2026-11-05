@@ -66,6 +66,18 @@ export function wireReasoningEffort(modelSlug: string | undefined, requested?: s
 }
 
 /**
+ * Google priority is a Tier 2/3 reservation. This project is Tier 1, and Flash
+ * and Flash-Lite are shed to standard (2026-11-05). Stop asking on any slug
+ * whose name contains "flash" (Flash and Flash-Lite, including floating
+ * aliases). Argon and other Gemini models still ask. Sol fast is separate.
+ */
+export function geminiRequestsPriority(model: string): boolean {
+  if (!/gemini/i.test(model)) return false;
+  if (/flash/i.test(model)) return false;
+  return true;
+}
+
+/**
  * OpenAI Sol family only (floating alias and dated Sol ids, including -pro).
  * Luna, auto, fusion, Sonnet, and Grok do not match. Used to attach
  * OpenRouter service_tier "fast" — a preference, not a different model id.
@@ -213,7 +225,7 @@ export async function callGemini(
       ...(opts.response_schema
         ? { responseMimeType: "application/json", responseSchema: opts.response_schema }
         : {}),
-      serviceTier: ServiceTier.PRIORITY,
+      ...(geminiRequestsPriority(resolvedModel) ? { serviceTier: ServiceTier.PRIORITY } : {}),
     },
   });
   const ms = Date.now() - t0;
@@ -294,10 +306,11 @@ export interface CallOpenRouterOpts {
  *     medium. GPT, Grok, auto, and fusion omit the field (Sol's own default
  *     is medium; Grok's own default is high). Gemini 2.5 Flash still 400s
  *     on thinkingLevel, so it is excluded.
- *   - Service tier: Gemini sends "priority". Sol-family slugs send "fast"
- *     (same OpenRouter preference: priority endpoints first, then default,
- *     billed as served). Anthropic speed and xAI priority stay off.
- *     Do not pin provider.only — that removes the fallback.
+ *   - Service tier: Argon and other non-Flash Gemini send "priority". Flash
+ *     and Flash-Lite omit it (Tier 1 sheds those pools). Sol-family slugs
+ *     send "fast" (same OpenRouter preference: priority endpoints first,
+ *     then default, billed as served). Anthropic speed and xAI priority
+ *     stay off. Do not pin provider.only — that removes the fallback.
  */
 export async function callOpenRouter(
   apiKey: string | undefined,
@@ -326,9 +339,10 @@ export async function callOpenRouter(
 
   const body: Record<string, unknown> = { model, messages };
   if (effort && supportsEffort) body.reasoning = { effort };
-  // Preference only. Gemini keeps Google priority. Sol family sends OpenAI fast
-  // (falls back to default and is billed as served). No provider.only pin.
-  if (isGemini) body.service_tier = "priority";
+  // Preference only. Argon still asks for Google priority. Flash and Flash-Lite
+  // omit the field. Sol family sends OpenAI fast (falls back to default and is
+  // billed as served). No provider.only pin.
+  if (isGemini && geminiRequestsPriority(model)) body.service_tier = "priority";
   else if (isOpenAiSolSlug(model)) body.service_tier = "fast";
   const serviceTier = typeof body.service_tier === "string" ? body.service_tier : "default";
   if (opts.temperature !== undefined) body.temperature = opts.temperature;

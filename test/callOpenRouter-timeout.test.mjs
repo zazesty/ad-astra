@@ -102,7 +102,7 @@ async function run() {
     check("503 then ok: 2 attempts", attempts === 2);
   }
 
-  // 4. Service tier: Sol fast, Gemini priority, everyone else unset.
+  // 4. Service tier: Sol fast, Argon priority, Flash and Flash-Lite unset.
   {
     async function tierFor(slug) {
       let body;
@@ -136,13 +136,15 @@ async function run() {
     globalThis.fetch = realFetch;
     check("sol fast hit reported priority", hit.service_tier === "priority");
     const gemini = await tierFor("~google/gemini-flash-latest");
-    check("gemini tier stays priority", gemini.service_tier === "priority");
+    check("flash does not ask priority", gemini.service_tier === undefined);
     check("omitted flash effort is high", gemini.reasoning?.effort === "high");
+    const lite = await tierFor("google/gemini-3.5-flash-lite");
+    check("flash-lite does not ask priority", lite.service_tier === undefined);
     const argon = await tierFor("google/gemini-4-argon");
     check("argon tier stays priority", argon.service_tier === "priority" && argon.model === "google/gemini-4-argon");
     check("omitted argon effort is medium", argon.reasoning?.effort === "medium");
     const bareGemini = await tierFor("gemini-2.5-flash");
-    check("bare gemini tier stays priority", bareGemini.service_tier === "priority" && bareGemini.model === "google/gemini-2.5-flash");
+    check("bare flash does not ask priority", bareGemini.service_tier === undefined && bareGemini.model === "google/gemini-2.5-flash");
     for (const slug of ["openai/gpt-6-luna", "openrouter/auto-beta", "~anthropic/claude-sonnet-latest", "x-ai/grok-4.6"]) {
       const body = await tierFor(slug);
       check(`no fast tier: ${slug}`, body.service_tier === undefined);

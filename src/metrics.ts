@@ -12,7 +12,9 @@ export type MetricsTool = "oracle" | "panel" | "research_fanout";
 // Gemini 4 Argon replaces that Flash pin on 2026-10-13. Do not pool eras.
 // Sol fast is on (2026-10-03 reopen): OpenAI Sol slugs send service_tier "fast"
 // from callOpenRouter. Anthropic speed:fast and xAI priority stay scrubbed.
-// Gemini keeps service_tier "priority". Do not add the scrubbed tiers back.
+// Argon and other non-Flash Gemini keep service_tier "priority". Flash and
+// Flash-Lite stopped asking on 2026-11-05 (Tier 1 sheds those pools).
+// Do not add the scrubbed Anthropic/xAI tiers back.
 // served_tier (2026-10-13) is the OpenRouter response field, not the request.
 // A Sol fast hit is "priority". A shed is "default". Absent means no response
 // tier (timeout, or upstream null).
