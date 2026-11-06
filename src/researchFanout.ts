@@ -368,18 +368,19 @@ async function synthesize(
     "Surface disagreements explicitly. Do not invent citations. Do not drop all sources.";
   const user = `Original question:\n${prompt}\n\nEvidence legs:\n${blocks}`;
 
-  // Synth can exceed the default 15s OR attempt abort. Medium: Argon high
-  // missed the chat abort on the 2026-10-13 bakeoff.
+  // Synth can exceed the default 15s OR attempt abort. Effort is omitted so
+  // Google's Argon default (medium) applies. High missed the chat abort on
+  // the 2026-10-13 bakeoff, which is why this is not left to the Argon wire.
   const attemptMs = Math.min(Math.max(budgetMs - 200, 5_000), 55_000);
   const r = await withTimeout(
     geminiTransport === "openrouter" || !geminiClient
       ? callOpenRouter(openrouterApiKey, DEFAULT_OPENROUTER_GEMINI_MODEL, user, {
           system: sys,
-          reasoning_effort: "medium",
+          reasoning_effort: null,
           grounded: false,
           attempt_timeout_ms: attemptMs,
         })
-      : callGemini(geminiClient, user, { system: sys, reasoning_effort: "medium", grounded: false }),
+      : callGemini(geminiClient, user, { system: sys, reasoning_effort: null, grounded: false }),
     budgetMs,
     "research_fanout synth",
   );

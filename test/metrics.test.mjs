@@ -30,7 +30,8 @@ function check(name, cond) {
 console.log("Unit: metrics");
 
 check("hashQuestion stable", hashQuestion("hello").length === 16);
-check("omitted flash logs high", loggedReasoningEffort("~google/gemini-flash-latest", undefined) === "high");
+check("omitted flash logs unspecified", loggedReasoningEffort("~google/gemini-flash-latest", undefined) === "unspecified");
+check("null effort logs unspecified", loggedReasoningEffort("google/gemini-4-argon", null) === "unspecified");
 check("omitted argon logs medium", loggedReasoningEffort("google/gemini-4-argon", undefined) === "medium");
 check("omitted bare gemini logs medium", loggedReasoningEffort("gemini", undefined) === "medium");
 check("omitted argon token logs medium", loggedReasoningEffort("argon", undefined) === "medium");

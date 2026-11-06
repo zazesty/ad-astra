@@ -50,17 +50,21 @@ export function geminiHonorsThinking(model: string): boolean {
  * Effort actually attached to a request.
  * Argon, and the bare panel tokens "argon" and "gemini" (that seat), send medium when the
  * caller omits it. High on Argon ran a 48.5s median on 2026-10-13, past the
- * 40s chat abort. Flash/Pro still send high when omitted. Sonnet sends
+ * 40s chat abort. Flash and Pro omit the field (2026-11-05): Google's default
+ * for current Flash is medium, and the old force-high line is gone. Sonnet sends
  * medium: Sonnet 5.5's own default is high, and medium is our seat default.
  * Sonnet 5.5 at medium is faster, more capable, and cheaper per task than
- * Sonnet 5 at high. An explicit request always wins. Every other family
- * omits the field.
+ * Sonnet 5 at high. An explicit request always wins. Pass null to omit even on
+ * Argon, so Google's own default applies. Every other family omits the field.
  */
-export function wireReasoningEffort(modelSlug: string | undefined, requested?: string): string | undefined {
+export function wireReasoningEffort(
+  modelSlug: string | undefined,
+  requested?: string | null,
+): string | undefined {
+  if (requested === null) return undefined;
   if (requested) return requested;
   const s = modelSlug ?? "";
   if (/argon/i.test(s) || s === "gemini") return "medium";
-  if (geminiHonorsThinking(s)) return "high";
   if (/sonnet|claude/i.test(s)) return "medium";
   return undefined;
 }
@@ -159,7 +163,8 @@ export interface CallGeminiOpts {
   system?: string;
   model?: string;
   grounded?: boolean;
-  reasoning_effort?: "low" | "medium" | "high";
+  /** A level forces that level. Null omits the field (provider default). Omitted uses wireReasoningEffort. */
+  reasoning_effort?: "low" | "medium" | "high" | null;
   temperature?: number;
   attempt_timeout_ms?: number;
   // Structured-output schema for the DIRECT SDK path (a @google/genai `Schema`
@@ -275,7 +280,8 @@ export type FusionPreset = "general-budget" | "general-high" | "general-fast";
 export interface CallOpenRouterOpts {
   system?: string;
   grounded?: boolean;
-  reasoning_effort?: "low" | "medium" | "high";
+  /** A level forces that level. Null omits the field (provider default). Omitted uses wireReasoningEffort. */
+  reasoning_effort?: "low" | "medium" | "high" | null;
   temperature?: number;
   response_format?: Record<string, unknown>;
   models?: string[];
@@ -302,10 +308,11 @@ export interface CallOpenRouterOpts {
  *     OR serves Grok as plain chat, so a grounded grok request would SILENTLY
  *     lose grounding; we surface it instead.
  *   - Reasoning effort: Argon gets medium when the field is omitted (high
- *     misses the chat abort). Flash/Pro still get high. Sonnet is sent
- *     medium. GPT, Grok, auto, and fusion omit the field (Sol's own default
- *     is medium; Grok's own default is high). Gemini 2.5 Flash still 400s
- *     on thinkingLevel, so it is excluded.
+ *     misses the chat abort). Flash and Pro omit it (Google's Flash default
+ *     is medium; the force-high line was removed 2026-11-05). Null omits the
+ *     field even on Argon. Sonnet is sent medium. GPT, Grok, auto, and fusion
+ *     omit the field (Sol's own default is medium; Grok's own default is high).
+ *     Gemini 2.5 Flash still 400s on thinkingLevel, so it is excluded.
  *   - Service tier: Argon and other non-Flash Gemini send "priority". Flash
  *     and Flash-Lite omit it (Tier 1 sheds those pools). Sol-family slugs
  *     send "fast" (same OpenRouter preference: priority endpoints first,

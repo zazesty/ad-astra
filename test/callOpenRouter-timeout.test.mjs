@@ -104,7 +104,7 @@ async function run() {
 
   // 4. Service tier: Sol fast, Argon priority, Flash and Flash-Lite unset.
   {
-    async function tierFor(slug) {
+    async function tierFor(slug, reasoning_effort) {
       let body;
       globalThis.fetch = async (_url, init) => {
         body = JSON.parse(init.body);
@@ -112,7 +112,9 @@ async function run() {
           choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
         }), { status: 200, headers: { "Content-Type": "application/json" } });
       };
-      await callOpenRouter("sk-test", slug, "hi", { attempt_timeout_ms: 5000 });
+      const opts = { attempt_timeout_ms: 5000 };
+      if (reasoning_effort !== undefined) opts.reasoning_effort = reasoning_effort;
+      await callOpenRouter("sk-test", slug, "hi", opts);
       globalThis.fetch = realFetch;
       return body;
     }
@@ -137,7 +139,10 @@ async function run() {
     check("sol fast hit reported priority", hit.service_tier === "priority");
     const gemini = await tierFor("~google/gemini-flash-latest");
     check("flash does not ask priority", gemini.service_tier === undefined);
-    check("omitted flash effort is high", gemini.reasoning?.effort === "high");
+    check("omitted flash effort is unset", gemini.reasoning === undefined);
+    const argonDefault = await tierFor("google/gemini-4-argon", null);
+    check("null argon effort is unset", argonDefault.reasoning === undefined);
+    check("null argon still asks priority", argonDefault.service_tier === "priority");
     const lite = await tierFor("google/gemini-3.5-flash-lite");
     check("flash-lite does not ask priority", lite.service_tier === undefined);
     const argon = await tierFor("google/gemini-4-argon");
