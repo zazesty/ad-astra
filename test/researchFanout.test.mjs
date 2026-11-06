@@ -6,6 +6,7 @@ import {
   coerceMode,
   dedupeCitations,
   ensureForceX,
+  fanoutPhaseSeatRecords,
   MAX_LEGS_HARD,
   summarizeLegs,
 } from "../build/researchFanout.js";
@@ -36,6 +37,34 @@ const plans = ensureForceX([{ query: "q", mode: "gemini_grounded" }], true, 4);
 check("ensureForceX adds grok_x", plans.some((p) => p.mode === "grok_x"));
 check("ensureForceX respects max", ensureForceX([{ query: "q", mode: "gemini_grounded" }], true, 1).length === 1);
 check("MAX_LEGS_HARD is 5", MAX_LEGS_HARD === 5);
+
+const phases = fanoutPhaseSeatRecords({
+  ts: "2026-11-06T00:00:00.000Z",
+  question_hash: "abc",
+  decompose_ms: 900,
+  decompose_source: "classifier",
+  synth_ms: 4200,
+  gemini_transport: "or",
+});
+check("phase rows are decompose then synth", phases.map((r) => r.seat_id).join(",") === "decompose,synth");
+check("decompose stays out of the gemini family", phases[0].family === "classifier" && phases[0].ok === true);
+check("synth effort is unspecified", phases[1].family === "synth" && phases[1].reasoning_effort === "unspecified");
+check("synth timeout is classified", fanoutPhaseSeatRecords({
+  ts: "2026-11-06T00:00:00.000Z",
+  question_hash: "abc",
+  decompose_ms: 10,
+  decompose_source: "fallback_single",
+  synth_ms: 40000,
+  synth_error: "research_fanout synth timed out after 40000ms",
+  gemini_transport: "direct",
+})[1].timed_out === true);
+check("skipped decompose writes no row", fanoutPhaseSeatRecords({
+  ts: "2026-11-06T00:00:00.000Z",
+  question_hash: "abc",
+  decompose_ms: 0,
+  decompose_source: "not_run",
+  gemini_transport: "or",
+}).length === 0);
 
 const t0 = Date.now() - 10_000;
 check("remainingMs", remainingMs(t0, 85_000) <= 75_000 && remainingMs(t0, 85_000) >= 74_000);

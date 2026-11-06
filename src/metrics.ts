@@ -142,6 +142,62 @@ export async function recordSeatMetric(rec: SeatMetricRecord): Promise<void> {
   }
 }
 
+/** One research_fanout invocation. Legs stay in the seat log; this is the route. */
+export interface FanoutRunRecord {
+  ts: string;
+  question_hash: string;
+  elapsed_ms: number;
+  decompose_ms: number;
+  decompose_source: string;
+  legs_ms: number;
+  synth_ms?: number;
+  synth_ok?: boolean;
+  degraded: boolean;
+  leg_count: number;
+  ok_legs: number;
+  max_legs: number;
+  error?: string;
+}
+
+function fanoutPathForDate(d: Date): string {
+  const day = d.toISOString().slice(0, 10);
+  return join(stateDir(), `fanout-${day}.jsonl`);
+}
+
+/** Append one fanout route line. Never throws. */
+export async function recordFanoutRun(rec: FanoutRunRecord): Promise<void> {
+  try {
+    const dir = stateDir();
+    await mkdir(dir, { recursive: true });
+    await appendFile(fanoutPathForDate(new Date(rec.ts)), JSON.stringify(rec) + "\n", "utf8");
+  } catch (e) {
+    console.error(`[metrics] fanout write failed: ${(e as Error).message}`);
+  }
+}
+
+export function summarizeFanoutRuns(runs: FanoutRunRecord[]): Record<string, unknown> {
+  const elapsed = runs.map((r) => r.elapsed_ms).filter((n) => n >= 0).sort((a, b) => a - b);
+  const decompose = runs.map((r) => r.decompose_ms).filter((n) => n >= 0).sort((a, b) => a - b);
+  const synth = runs
+    .map((r) => r.synth_ms)
+    .filter((n): n is number => typeof n === "number" && n >= 0)
+    .sort((a, b) => a - b);
+  const degraded = runs.filter((r) => r.degraded).length;
+  const n = runs.length;
+  return {
+    run_count: n,
+    degraded_rate: n ? degraded / n : 0,
+    elapsed_ms: { p50: percentile(elapsed, 50), p90: percentile(elapsed, 90), p99: percentile(elapsed, 99) },
+    decompose_ms: { p50: percentile(decompose, 50), p90: percentile(decompose, 90), p99: percentile(decompose, 99) },
+    synth_ms: {
+      n: synth.length,
+      p50: percentile(synth, 50),
+      p90: percentile(synth, 90),
+      p99: percentile(synth, 99),
+    },
+  };
+}
+
 function percentile(sorted: number[], p: number): number {
   if (!sorted.length) return 0;
   const idx = Math.ceil((p / 100) * sorted.length) - 1;
@@ -257,6 +313,44 @@ export function computeMetricsStats(
   };
 }
 
+async function loadFanoutInWindow(opts: {
+  window_days?: number;
+  since?: string;
+}): Promise<FanoutRunRecord[]> {
+  const dir = stateDir();
+  let files: string[] = [];
+  try {
+    files = (await readdir(dir)).filter((f) => f.startsWith("fanout-") && f.endsWith(".jsonl"));
+  } catch {
+    return [];
+  }
+  const sinceMs = opts.since
+    ? new Date(opts.since).getTime()
+    : Date.now() - (opts.window_days ?? 7) * 86_400_000;
+  const rows: FanoutRunRecord[] = [];
+  for (const f of files.sort()) {
+    const day = f.slice("fanout-".length, -".jsonl".length);
+    const dayMs = new Date(`${day}T00:00:00Z`).getTime();
+    if (dayMs + 86_400_000 < sinceMs) continue;
+    try {
+      const raw = await readFile(join(dir, f), "utf8");
+      for (const line of raw.split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const rec = JSON.parse(line) as FanoutRunRecord;
+          if (new Date(rec.ts).getTime() < sinceMs) continue;
+          rows.push(rec);
+        } catch {
+          /* skip malformed */
+        }
+      }
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  return rows;
+}
+
 export async function queryMetrics(opts: {
   window_days?: number;
   since?: string;
@@ -264,7 +358,12 @@ export async function queryMetrics(opts: {
   tool?: MetricsTool;
 }): Promise<Record<string, unknown>> {
   const rows = await loadMetricsInWindow(opts);
-  return computeMetricsStats(rows, opts.group_by ?? "family");
+  const stats = computeMetricsStats(rows, opts.group_by ?? "family");
+  if (!opts.tool || opts.tool === "research_fanout") {
+    const runs = await loadFanoutInWindow(opts);
+    if (runs.length) stats.fanout = summarizeFanoutRuns(runs);
+  }
+  return stats;
 }
 
 export function registerGetMetrics(server: any) {

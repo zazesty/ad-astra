@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   recordSeatMetric,
+  recordFanoutRun,
+  summarizeFanoutRuns,
   computeMetricsStats,
   hashQuestion,
   familyFromSlug,
@@ -111,6 +113,30 @@ try {
   const day = new Date().toISOString().slice(0, 10);
   const raw = await readFile(join(stateDir, `metrics-${day}.jsonl`), "utf8");
   check("recordSeatMetric writes JSONL", raw.includes('"tool":"oracle"'));
+
+  await recordFanoutRun({
+    ts: new Date().toISOString(),
+    question_hash: "abc",
+    elapsed_ms: 30000,
+    decompose_ms: 800,
+    decompose_source: "classifier",
+    legs_ms: 12000,
+    synth_ms: 9000,
+    synth_ok: true,
+    degraded: false,
+    leg_count: 3,
+    ok_legs: 3,
+    max_legs: 4,
+  });
+  const fanoutRaw = await readFile(join(stateDir, `fanout-${day}.jsonl`), "utf8");
+  check("recordFanoutRun writes JSONL", fanoutRaw.includes('"elapsed_ms":30000'));
+  const fanoutStats = summarizeFanoutRuns([
+    { ts: "t", question_hash: "a", elapsed_ms: 1000, decompose_ms: 100, decompose_source: "classifier", legs_ms: 400, synth_ms: 500, synth_ok: true, degraded: false, leg_count: 1, ok_legs: 1, max_legs: 4 },
+    { ts: "t", question_hash: "b", elapsed_ms: 3000, decompose_ms: 300, decompose_source: "fallback_single", legs_ms: 800, degraded: true, leg_count: 1, ok_legs: 0, max_legs: 4 },
+  ]);
+  check("summarizeFanoutRuns count", fanoutStats.run_count === 2);
+  check("summarizeFanoutRuns elapsed p50", fanoutStats.elapsed_ms.p50 === 1000);
+  check("summarizeFanoutRuns synth n excludes skips", fanoutStats.synth_ms.n === 1);
 
   const stats = computeMetricsStats([
     { latency_ms: 100, grounded_requested: true, grounding_fired: false, failover_fired: true, timed_out: false, ok: true, degraded: false, tool: "oracle", seat_id: "a", family: "gemini", model_slug: "g", transport: "or", x_search_fired: false, reasoning_effort: "high", question_hash: "x", ts: new Date().toISOString() },

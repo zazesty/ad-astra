@@ -22,11 +22,13 @@ import {
 } from "./oracleClassifier.js";
 import {
   classifyError,
-  familyFromSlug,
   hashQuestion,
   isAttemptTimeoutError,
   loggedReasoningEffort,
+  recordFanoutRun,
   recordSeatMetric,
+  type FanoutRunRecord,
+  type SeatMetricRecord,
 } from "./metrics.js";
 import { canStartAttempt, remainingMs, seatBudgetMs, withTimeout } from "./timeouts.js";
 import { type BudgetProfile } from "./budgetProfile.js";
@@ -184,6 +186,72 @@ export function ensureForceX(plans: LegPlan[], force: boolean, maxLegs: number):
  * Pure post-legs assembly (E2 soak contract without live providers):
  * citation union from ok legs only; degraded when any leg failed/timed out.
  */
+/** Decompose and synth are model calls. Their own family keeps them out of leg percentiles. */
+export function fanoutPhaseSeatRecords(input: {
+  ts: string;
+  question_hash: string;
+  decompose_ms: number;
+  decompose_source: "classifier" | "fallback_single" | "not_run";
+  synth_ms?: number;
+  synth_error?: string;
+  gemini_transport: "or" | "direct";
+}): SeatMetricRecord[] {
+  const out: SeatMetricRecord[] = [];
+  if (input.decompose_source !== "not_run") {
+    const ok = input.decompose_source === "classifier";
+    out.push({
+      ts: input.ts,
+      tool: "research_fanout",
+      route_mode: "decompose",
+      seat_id: "decompose",
+      family: "classifier",
+      model_slug: CLASSIFIER_MODEL,
+      transport: "or",
+      grounded_requested: false,
+      grounding_fired: false,
+      x_search_fired: false,
+      reasoning_effort: "low",
+      latency_ms: input.decompose_ms,
+      failover_fired: false,
+      timed_out: false,
+      ok,
+      degraded: !ok,
+      error_class: ok ? undefined : "other",
+      question_hash: input.question_hash,
+    });
+  }
+  if (input.synth_ms != null) {
+    const ok = !input.synth_error;
+    const timedOut = isAttemptTimeoutError(input.synth_error);
+    out.push({
+      ts: input.ts,
+      tool: "research_fanout",
+      route_mode: "synth",
+      seat_id: "synth",
+      family: "synth",
+      model_slug: DEFAULT_OPENROUTER_GEMINI_MODEL,
+      transport: input.gemini_transport,
+      grounded_requested: false,
+      grounding_fired: false,
+      x_search_fired: false,
+      reasoning_effort: loggedReasoningEffort(DEFAULT_OPENROUTER_GEMINI_MODEL, null),
+      latency_ms: input.synth_ms,
+      failover_fired: false,
+      timed_out: timedOut,
+      ok,
+      degraded: !ok,
+      error_class: classifyError(timedOut ? "timeout" : ok ? "ok" : "error", input.synth_error),
+      question_hash: input.question_hash,
+    });
+  }
+  return out;
+}
+
+function persistFanout(run: FanoutRunRecord, seats: SeatMetricRecord[]): void {
+  void recordFanoutRun(run);
+  for (const seat of seats) void recordSeatMetric(seat);
+}
+
 export function summarizeLegs(legs: LegResult[]): {
   citations: string[];
   okCount: number;
@@ -487,6 +555,41 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
       const effort = undefined;
       const qHash = hashQuestion(args.prompt);
       const phases = { decompose_ms: 0, legs_ms: 0, synth_ms: undefined as number | undefined };
+      const geminiTransport: "or" | "direct" = opts.geminiTransport === "openrouter" ? "or" : "direct";
+      let decomposeSource: "classifier" | "fallback_single" | "not_run" = "not_run";
+      let synthError: string | undefined;
+      let degraded = false;
+      let legCount = 0;
+      let okLegs = 0;
+
+      const storeRun = (error?: string) => {
+        const ts = new Date().toISOString();
+        persistFanout(
+          {
+            ts,
+            question_hash: qHash,
+            elapsed_ms: Date.now() - outerT0,
+            decompose_ms: phases.decompose_ms,
+            decompose_source: decomposeSource,
+            legs_ms: phases.legs_ms,
+            ...(phases.synth_ms != null ? { synth_ms: phases.synth_ms, synth_ok: !synthError } : {}),
+            degraded: degraded || !!error,
+            leg_count: legCount,
+            ok_legs: okLegs,
+            max_legs: maxLegs,
+            ...(error ? { error: error.slice(0, 300) } : {}),
+          },
+          fanoutPhaseSeatRecords({
+            ts,
+            question_hash: qHash,
+            decompose_ms: phases.decompose_ms,
+            decompose_source: decomposeSource,
+            synth_ms: phases.synth_ms,
+            synth_error: synthError,
+            gemini_transport: geminiTransport,
+          }),
+        );
+      };
 
       try {
         // --- decompose ---
@@ -494,6 +597,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
         const decT0 = Date.now();
         let { plans, source } = await decompose(opts.openrouterApiKey, args.prompt, maxLegs, decBudget);
         plans = ensureForceX(plans, !!args.force_x_leg, maxLegs);
+        decomposeSource = source;
         phases.decompose_ms = Date.now() - decT0;
 
         // --- legs ---
@@ -523,7 +627,9 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
         phases.legs_ms = Date.now() - legsT0;
 
         const summary = summarizeLegs(legs);
-        let degraded = summary.degraded;
+        degraded = summary.degraded;
+        legCount = legs.length;
+        okLegs = summary.okCount;
         let answer: string | undefined;
 
         if (doSynth && summary.okCount > 0) {
@@ -543,7 +649,8 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
             );
           } catch (e) {
             degraded = true;
-            console.error(`[research_fanout] synth failed: ${(e as Error)?.message ?? e}`);
+            synthError = (e as Error)?.message ?? String(e);
+            console.error(`[research_fanout] synth failed: ${synthError}`);
             // Partial: best leg text
             answer = legs
               .filter((l) => l.status === "ok")
@@ -572,10 +679,13 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           slots_status: summary.slots_status,
         };
 
+        storeRun();
         return { content: [{ type: "text", text: JSON.stringify(resp, null, 2) }] };
       } catch (err) {
+        const message = (err as Error).message;
+        storeRun(message);
         return {
-          content: [{ type: "text", text: `research_fanout failed: ${(err as Error).message}` }],
+          content: [{ type: "text", text: `research_fanout failed: ${message}` }],
           isError: true,
         };
       }
