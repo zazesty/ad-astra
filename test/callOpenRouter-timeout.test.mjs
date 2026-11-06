@@ -150,7 +150,7 @@ async function run() {
     check("omitted argon effort is medium", argon.reasoning?.effort === "medium");
     const bareGemini = await tierFor("gemini-2.5-flash");
     check("bare flash does not ask priority", bareGemini.service_tier === undefined && bareGemini.model === "google/gemini-2.5-flash");
-    for (const slug of ["openai/gpt-6-luna", "openrouter/auto-beta", "~anthropic/claude-sonnet-latest", "x-ai/grok-4.6"]) {
+    for (const slug of ["openai/gpt-6-luna", "openrouter/auto-beta", "~anthropic/claude-sonnet-latest", "x-ai/grok-4.7"]) {
       const body = await tierFor(slug);
       check(`no fast tier: ${slug}`, body.service_tier === undefined);
       check(`not a sol slug: ${slug}`, isOpenAiSolSlug(slug) === false);

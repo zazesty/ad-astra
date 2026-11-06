@@ -48,7 +48,7 @@ export interface GrokResult {
 
 const DEFAULT_BASE_URL = "https://api.x.ai/v1";
 /** Single source of truth for direct Grok model pin (index + oracle resolve import this). */
-export const DEFAULT_MODEL = "grok-4.6";
+export const DEFAULT_MODEL = "grok-4.7";
 
 export async function callGrok(
   apiKey: string | undefined,

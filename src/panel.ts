@@ -143,7 +143,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       z
         .enum(["grok", "argon", "sol", "sonnet"])
         .describe(
-          "Backend for this spec. 'grok' (xAI direct, grok-4.6) — contrarian; grounded:true searches X " +
+          "Backend for this spec. 'grok' (xAI direct, grok-4.7) — contrarian; grounded:true searches X " +
             "(+web if include_web). 'argon' (Gemini 4 Argon) — strong reasoning + best live web grounding. " +
             "'sol' (OpenRouter, GPT Sol latest) — third-family voice. " +
             "'sonnet' (Sonnet latest) — Claude seat, sent medium. Sonnet 5.5 at medium is faster, more capable, and cheaper per task than Sonnet 5 at high. " +
