@@ -175,7 +175,7 @@ const DEFAULT_REASONING_POOL = [OPENROUTER_AUTO_SLUG, GEMINI_PRO_SLUG];
  * Full cross-family fill (opt-in via exclude_family:"none"|"off"): gemini → grok →
  * gpt → auto-beta. Use when the CALLER is not Grok (e.g. claude.ai) and a
  * grok-direct contrarian opinion seat is wanted. Default path is `defaultCallerPool`
- * (Grok-primary — no Grok opinion seat).
+ * (grok, argon, sol, auto-beta).
  */
 function panelFillPool(existing: Seat[]): string[] {
   const haveGrok = existing.some((s) => s.provider === "grok-direct");
@@ -193,23 +193,29 @@ function panelFillPool(existing: Seat[]): string[] {
 }
 
 /**
- * DEFAULT reasoning fill (Grok-primary, 2026-08). No grok-direct REASONING seat —
- * Grok is the usual caller and must not consult itself. Cross-family dissent only:
+ * DEFAULT reasoning fill (2026-11). Grok opinion seat is explicitly included:
+ * the owner wants Grok (grok-4.7, xAI direct) in the auto-fill.
  *
- *   1 seat (with exclude_family:"grok" legacy) → sonnet
- *   multi-seat default → sonnet · gemini · gpt · auto-beta.
- *   Never a grok opinion seat. With no min_perspectives the classifier
- *   stops at 4. min_perspectives above 4 walks the same four again.
+ *   multi-seat default → grok · gemini · gpt · auto-beta.
+ *   With no min_perspectives the classifier stops at 4.
+ *   min_perspectives above 4 walks the same four again.
  *
  * The returned array is one rotation of that four, so a seat count above 4
- * repeats it. A family already seated (a grounded Gemini capability seat)
- * moves to the end of the cycle, so the first pass fills whoever is missing.
- * Capability seats stay
- * in `buildSlots` before this runs — grok-x is live-X data, not Grok's opinion.
- * exclude_family is not on the schema. "grok" remains a legacy synonym for
- * this pool; "none"/"off" still reaches panelFillPool for tests.
+ * repeats it. A family already seated (a grounded Gemini capability seat, or
+ * a grok-x capability seat) moves to the end of the cycle, so the first pass
+ * fills whoever is missing. Capability seats stay in `buildSlots` before this runs.
+ * exclude_family is not on the schema. "grok" remains a legacy flag meaning
+ * "no grok opinion seat" (sonnet-first pattern); "none"/"off" reaches panelFillPool for tests.
  */
 const CALLER_PATTERN = [
+  "grok",
+  GEMINI_PRO_SLUG,
+  GPT_SLUG,
+  OPENROUTER_AUTO_SLUG,
+];
+
+/** Preserved sonnet-first pattern for legacy exclude_family:"grok" (no grok opinion seat). */
+const NO_GROK_CALLER_PATTERN = [
   CLAUDE_SONNET_OPENROUTER_SLUG,
   GEMINI_PRO_SLUG,
   GPT_SLUG,
@@ -225,17 +231,26 @@ function familyAlreadySeated(existing: Seat[], slug: string): boolean {
   if (/gemini/i.test(slug)) {
     return existing.some((s) => s.provider === "openrouter" && /gemini/i.test(s.model_slug));
   }
+  if (isGrokSlug(slug)) {
+    return existing.some((s) => s.provider === "grok-direct" || isGrokSlug(s.model_slug));
+  }
   return false;
 }
 
 function defaultCallerPool(existing: Seat[]): string[] {
-  // Already-seated families (a grounded Argon capability seat) move to the
+  // Already-seated families (a grounded Argon capability seat or grok-x) move to the
   // end of the cycle, so the first pass fills the families still missing.
   const open = CALLER_PATTERN.filter((slug) => !familyAlreadySeated(existing, slug));
   const taken = CALLER_PATTERN.filter((slug) => familyAlreadySeated(existing, slug));
   return open.length === 0 ? [...CALLER_PATTERN] : [...open, ...taken];
 }
-/** @deprecated alias — same as defaultCallerPool (Grok-primary default). */
+
+function noGrokCallerPool(existing: Seat[]): string[] {
+  const open = NO_GROK_CALLER_PATTERN.filter((slug) => !familyAlreadySeated(existing, slug));
+  const taken = NO_GROK_CALLER_PATTERN.filter((slug) => familyAlreadySeated(existing, slug));
+  return open.length === 0 ? [...NO_GROK_CALLER_PATTERN] : [...open, ...taken];
+}
+/** @deprecated alias — same as defaultCallerPool. */
 const grokCallerPool = defaultCallerPool;
 
 // A grok slug in the reasoning pool (the literal "grok" diversity seat) → a
@@ -317,20 +332,23 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   const want = ov.n ?? floor;
   const target = Math.max(want, seats.length, 1);
   // Reasoning-pool fill — purely AUTO, no hand-pick (naming exact models is
-  // ask_panel's job). Grok-primary DEFAULT: multi-seat → Sonnet, Argon, Sol,
-  // auto-beta as the 4th. No grok-direct opinion seat. exclude_family is not a
-  // caller knob. "grok" remains a legacy synonym for this pool (also forces
-  // Sonnet at n=1). "none"/"off" restores full cross-family including
+  // ask_panel's job). DEFAULT: multi-seat → Grok, Argon, Sol,
+  // auto-beta as the 4th. exclude_family is not a caller knob.
+  // "grok" remains a legacy flag for no grok opinion seat (forces Sonnet at n=1,
+  // and sonnet-first at n>=2). "none"/"off" restores full cross-family including
   // grok-direct, for tests only.
   // n=1 without that flag keeps cheap openrouter/auto-beta.
   const fullCrossFamily = ov.exclude_family === "none" || ov.exclude_family === "off";
+  const noGrokFamily = ov.exclude_family === "grok";
   const pool = fullCrossFamily
     ? target >= 2
       ? panelFillPool(seats)
       : DEFAULT_REASONING_POOL
-    : target >= 2 || ov.exclude_family === "grok"
-      ? defaultCallerPool(seats)
-      : DEFAULT_REASONING_POOL;
+    : noGrokFamily
+      ? noGrokCallerPool(seats)
+      : target >= 2
+        ? defaultCallerPool(seats)
+        : DEFAULT_REASONING_POOL;
   let i = 0;
   let autoOrdinal = 0;
   while (seats.length < target) {

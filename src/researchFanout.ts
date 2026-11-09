@@ -3,7 +3,7 @@
  * Spec: /root/research_fanout_spec.md
  *
  * Flow: decompose → route → execute legs (direct cores only) → synthesize.
- * Hard outer budget 85s; partial return; citation union preserved.
+ * Client-adaptive outer budget (50s chat, 55s Claude, 85s Grok Build); partial return; citation union preserved.
  */
 import { z } from "zod";
 import { callGrok, type Grounding } from "./grokCore.js";
@@ -20,6 +20,10 @@ import {
   CLASSIFIER_MODEL,
   CLASSIFIER_FALLBACK_MODELS,
 } from "./oracleClassifier.js";
+import {
+  GEMINI_FLASH_OR,
+  GEMINI_FLASH_DIRECT,
+} from "./modelPins.js";
 import {
   classifyError,
   hashQuestion,
@@ -298,20 +302,26 @@ async function runLeg(
 
   const record = (leg: LegResult) => {
     const ok = leg.status === "ok";
+    const legModelSlug =
+      plan.mode.startsWith("grok")
+        ? "grok"
+        : (leg.transport === "direct" || (leg.transport == null && opts.geminiTransport === "direct"))
+          ? GEMINI_FLASH_DIRECT
+          : GEMINI_FLASH_OR;
     void recordSeatMetric({
       ts: new Date().toISOString(),
       tool: "research_fanout",
       route_mode: plan.mode,
       seat_id: id,
       family: plan.mode.startsWith("grok") ? "grok" : "gemini",
-      model_slug: plan.mode.startsWith("grok") ? "grok" : DEFAULT_OPENROUTER_GEMINI_MODEL,
+      model_slug: legModelSlug,
       transport: leg.transport ?? (plan.mode.startsWith("grok") ? "direct" : "or"),
       grounded_requested: true,
       grounding_fired: ok && (leg.citations?.length ?? 0) > 0,
       x_search_fired: ok && plan.mode === "grok_x" && (leg.citations?.length ?? 0) > 0,
       reasoning_effort: loggedReasoningEffort(
-        plan.mode.startsWith("grok") ? "grok" : DEFAULT_OPENROUTER_GEMINI_MODEL,
-        effort,
+        legModelSlug,
+        plan.mode === "gemini_grounded" ? null : effort,
       ),
       latency_ms: leg.latency_ms,
       failover_fired: false,
@@ -330,19 +340,22 @@ async function runLeg(
         if (plan.mode === "gemini_grounded") {
           const geminiOpts = {
             grounded: true as const,
-            reasoning_effort: effort,
+            reasoning_effort: null,
             attempt_timeout_ms:
               opts.geminiTransport === "openrouter"
-                ? Math.min(45_000, Math.max(5_000, budgetMs - 500))
+                ? Math.max(5_000, budgetMs - 500)
                 : undefined,
           };
           const callOnce = () =>
             opts.geminiTransport === "openrouter"
-              ? callOpenRouter(opts.openrouterApiKey, DEFAULT_OPENROUTER_GEMINI_MODEL, plan.query, {
+              ? callOpenRouter(opts.openrouterApiKey, GEMINI_FLASH_OR, plan.query, {
                   ...geminiOpts,
                   grounded: true,
                 })
-              : callGemini(geminiClient, plan.query, geminiOpts);
+              : callGemini(geminiClient, plan.query, {
+                  ...geminiOpts,
+                  model: GEMINI_FLASH_DIRECT,
+                });
 
           let r = await callOnce();
           // Cap retries under budget: at most 1 miss-retry for fanout (tighter than panel).
@@ -458,6 +471,7 @@ async function synthesize(
 export function registerResearchFanout(server: any, opts: RegisterOpts) {
   const geminiClient = makeGeminiClient(opts.geminiApiKey);
   const outerBudgetMs = opts.budget?.fanoutOuterMs ?? OUTER_BUDGET_MS;
+  const legSeatCapMs = opts.budget?.fanoutLegSeatMs ?? LEG_SEAT_CAP_MS;
 
   server.registerTool(
     "research_fanout",
@@ -482,10 +496,10 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
         "timeout/shallow routing; " +
         "(4) trivial textbook constants (\"boiling point of water\") → may " +
         "grounding_miss fail-loud with degraded:true and no answer (by design, not a bug). " +
-        "FLOW: decompose ≤max_legs → parallel provider-core legs (default Gemini 4 Argon, web-grounded; " +
+        "FLOW: decompose ≤max_legs → parallel provider-core legs (Gemini 3.8 Flash, web-grounded; " +
         "optional grok_x / grok_grounded; no nested tools) → synth merges + citation union " +
         "OR synthesize:false returns raw legs. Legs fail independently; partial return + " +
-        "degraded/slots_status. Hard ~85s outer budget; healthy complex runs often ~30–45s; " +
+        "degraded/slots_status. Outer budget depends on client (about 50s for chat, about 55s for Claude, about 85s for Grok Build); healthy complex runs often ~30–45s; " +
         "multi-leg = multi-call cost. lens/system = SYNTHESIS tone only (not routing). " +
         "Check route.elapsed_ms, legs[].status, citations[], degraded.",
       inputSchema: {
@@ -602,10 +616,13 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
 
         // --- legs ---
         const legsT0 = Date.now();
-        const legPhaseBudget = Math.min(LEG_PHASE_CAP_MS, remainingMs(outerT0, outerBudgetMs));
+        const outerRem = remainingMs(outerT0, outerBudgetMs);
+        const legPhaseBudget = doSynth
+          ? Math.min(LEG_PHASE_CAP_MS, outerRem, Math.max(5_000, outerRem - 8_000))
+          : Math.min(LEG_PHASE_CAP_MS, outerRem);
         const settled = await mapLimitSettled(plans, CONCURRENCY, async (plan, i) => {
           const id = `leg-${i}`;
-          const budget = seatBudgetMs(legsT0, legPhaseBudget, LEG_SEAT_CAP_MS);
+          const budget = seatBudgetMs(legsT0, legPhaseBudget, legSeatCapMs);
           // Also respect outer wall
           const outerLeft = remainingMs(outerT0, outerBudgetMs);
           const b = Math.min(budget, outerLeft);

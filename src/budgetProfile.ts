@@ -1,14 +1,18 @@
 /**
  * Per-consumer wall-clock envelopes.
  *
- * Grok chat (~60s MCP tool window) vs Grok Build (`grok-cli/*`, 120s).
+ * Three envelopes:
+ * - Grok Build (`grok-cli/*`, 120s envelope, fanout outer 85s).
+ * - Claude (`Claude-User`, claude.ai custom connector and Claude Code; both die near 60s broker timeout, fanout outer 55s).
+ * - Grok chat & unknown clients (~60s MCP tool window, fanout outer 50s).
+ *
  * Unknown UAs get the chat envelope so a hung seat cannot discard siblings.
  * Engine-internal — not a tool-surface change.
  */
 
 import { MIN_NEXT_ATTEMPT_MS } from "./timeouts.js";
 
-export type BudgetProfileName = "cli" | "chat";
+export type BudgetProfileName = "cli" | "chat" | "claude";
 
 export interface BudgetProfile {
   name: BudgetProfileName;
@@ -27,6 +31,7 @@ export interface BudgetProfile {
   oracleFusionMs: number;
   oracleFusionOrAttemptMs: number;
   fanoutOuterMs: number;
+  fanoutLegSeatMs?: number;
 }
 
 /** Grok Build loopback — current 2026-08 seat caps. */
@@ -46,6 +51,7 @@ export const CLI_BUDGET: BudgetProfile = {
   oracleFusionMs: 120_000,
   oracleFusionOrAttemptMs: 110_000,
   fanoutOuterMs: 85_000,
+  fanoutLegSeatMs: 45_000,
 };
 
 /**
@@ -69,11 +75,37 @@ export const CHAT_BUDGET: BudgetProfile = {
   oracleFusionMs: 50_000,
   oracleFusionOrAttemptMs: 45_000,
   fanoutOuterMs: 50_000,
+  fanoutLegSeatMs: 45_000,
+};
+
+/**
+ * Claude chat (claude.ai custom connector) & Claude Code (`Claude-User` UA).
+ * Both die near 60s broker timeout. Fanout outer 55s gives legs/synth maximum room
+ * while returning before broker disconnect. Panel/oracle stay on 50s chat envelope.
+ */
+export const CLAUDE_BUDGET: BudgetProfile = {
+  name: "claude",
+  panelOuterMs: 50_000,
+  panelOrAttemptMs: 40_000,
+  panelGrokSeatMs: 50_000,
+  panelGeminiSeatMs: 50_000,
+  panelOpenaiSeatMs: 50_000,
+  panelClaudeSeatMs: 50_000,
+  oracleOuterMs: 50_000,
+  oracleSlotMs: 50_000,
+  oracleOrAttemptMs: 40_000,
+  oracleGrokReasoningMs: 50_000,
+  oracleCapabilityMs: 50_000,
+  oracleFusionMs: 50_000,
+  oracleFusionOrAttemptMs: 45_000,
+  fanoutOuterMs: 55_000,
+  fanoutLegSeatMs: 50_000,
 };
 
 export function budgetProfileFromUserAgent(ua: string | undefined | null): BudgetProfile {
   const s = String(ua ?? "").toLowerCase();
   if (s.includes("grok-cli")) return CLI_BUDGET;
+  if (s.includes("claude")) return CLAUDE_BUDGET;
   return CHAT_BUDGET;
 }
 

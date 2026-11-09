@@ -48,3 +48,6 @@ export const CLAUDE_SONNET_OPENROUTER_SLUG = "~anthropic/claude-sonnet-latest";
 export const GEMINI_FLASH_LITE_VER = "3.5-flash-lite";
 export const GEMINI_FLASH_LITE_OR = `google/gemini-${GEMINI_FLASH_LITE_VER}` as const;
 export const GEMINI_FLASH_LITE_DIRECT = `gemini-${GEMINI_FLASH_LITE_VER}` as const;
+
+export const GEMINI_FLASH_OR = "google/gemini-3.8-flash";
+export const GEMINI_FLASH_DIRECT = "gemini-3.8-flash";

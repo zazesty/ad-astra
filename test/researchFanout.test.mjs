@@ -11,6 +11,7 @@ import {
   summarizeLegs,
 } from "../build/researchFanout.js";
 import { withTimeout, remainingMs, seatBudgetMs } from "../build/timeouts.js";
+import { GEMINI_FLASH_OR, GEMINI_FLASH_DIRECT } from "../build/modelPins.js";
 
 let pass = 0;
 let fail = 0;
@@ -37,6 +38,8 @@ const plans = ensureForceX([{ query: "q", mode: "gemini_grounded" }], true, 4);
 check("ensureForceX adds grok_x", plans.some((p) => p.mode === "grok_x"));
 check("ensureForceX respects max", ensureForceX([{ query: "q", mode: "gemini_grounded" }], true, 1).length === 1);
 check("MAX_LEGS_HARD is 5", MAX_LEGS_HARD === 5);
+check("GEMINI_FLASH_OR is google/gemini-3.8-flash", GEMINI_FLASH_OR === "google/gemini-3.8-flash");
+check("GEMINI_FLASH_DIRECT is gemini-3.8-flash", GEMINI_FLASH_DIRECT === "gemini-3.8-flash");
 
 const phases = fanoutPhaseSeatRecords({
   ts: "2026-11-06T00:00:00.000Z",
@@ -69,6 +72,7 @@ check("skipped decompose writes no row", fanoutPhaseSeatRecords({
 const t0 = Date.now() - 10_000;
 check("remainingMs", remainingMs(t0, 85_000) <= 75_000 && remainingMs(t0, 85_000) >= 74_000);
 check("seatBudgetMs caps", seatBudgetMs(t0, 85_000, 45_000) === 45_000);
+check("seatBudgetMs claude cap 50s", seatBudgetMs(Date.now(), 55_000, 50_000) === 50_000);
 
 let timed = false;
 try {

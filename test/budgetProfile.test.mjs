@@ -7,6 +7,7 @@ import {
   shortUserAgent,
   CLI_BUDGET,
   CHAT_BUDGET,
+  CLAUDE_BUDGET,
 } from "../build/budgetProfile.js";
 import { canStartAttempt, capAttemptMs, MIN_NEXT_ATTEMPT_MS } from "../build/timeouts.js";
 import { applyOpusRemap, normalizePanelModel } from "../build/panel.js";
@@ -27,10 +28,19 @@ console.log("Unit: budgetProfile + opus remap + attempt cap");
 
 check("grok-cli → cli", budgetProfileFromUserAgent("grok-cli/1.0.13").name === "cli");
 check("grok-cli case", budgetProfileFromUserAgent("Grok-CLI/1").name === "cli");
+check("Claude-User → claude", budgetProfileFromUserAgent("Claude-User").name === "claude");
+check("Claude case insensitive", budgetProfileFromUserAgent("claude-code/0.1").name === "claude");
+check("claude fanoutOuterMs 55s", budgetProfileFromUserAgent("Claude-User").fanoutOuterMs === 55_000);
+check("claude fanoutLegSeatMs 50s", budgetProfileFromUserAgent("Claude-User").fanoutLegSeatMs === 50_000);
 check("empty UA → chat", budgetProfileFromUserAgent(undefined).name === "chat");
+check("empty UA fanoutOuterMs 50s", budgetProfileFromUserAgent(undefined).fanoutOuterMs === 50_000);
 check("browser UA → chat", budgetProfileFromUserAgent("Mozilla/5.0").name === "chat");
 check("chat outer 50s", budgetProfileFromUserAgent("").panelOuterMs === 50_000);
 check("cli outer 110s", budgetProfileFromUserAgent("grok-cli/x").panelOuterMs === CLI_BUDGET.panelOuterMs);
+check(
+  "claude panel outer == chat panel outer",
+  budgetProfileFromUserAgent("Claude-User").panelOuterMs === CHAT_BUDGET.panelOuterMs,
+);
 check("chat OR abort < outer", CHAT_BUDGET.panelOrAttemptMs < CHAT_BUDGET.panelOuterMs);
 check("cli gemini seat 100s", CLI_BUDGET.panelGeminiSeatMs === 100_000);
 
