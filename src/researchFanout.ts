@@ -566,7 +566,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
       const outerT0 = Date.now();
       const maxLegs = Math.min(MAX_LEGS_HARD, Math.max(1, args.max_legs ?? 4));
       const doSynth = args.synthesize !== false;
-      const effort = undefined;
+      const effort: "low" | "medium" | "high" = "medium";
       const qHash = hashQuestion(args.prompt);
       const phases = { decompose_ms: 0, legs_ms: 0, synth_ms: undefined as number | undefined };
       const geminiTransport: "or" | "direct" = opts.geminiTransport === "openrouter" ? "or" : "direct";
