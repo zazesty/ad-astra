@@ -348,6 +348,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           failover_fired?: boolean;
           model_slug?: string;
           served_tier?: string;
+          reasoning_effort?: string | null;
         }) => {
           if (recorded) return;
           recorded = true;
@@ -362,7 +363,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             grounded_requested: !!spec.grounded,
             grounding_fired: ok && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
             x_search_fired: ok && model === "grok" && !!spec.grounded && (extra.citations?.length ?? 0) > 0,
-            reasoning_effort: loggedReasoningEffort(extra.model_slug || defaultSlug),
+            reasoning_effort: loggedReasoningEffort(extra.model_slug || defaultSlug, extra.reasoning_effort),
             latency_ms: Date.now() - t0,
             failover_fired: !!extra.failover_fired,
             timed_out: !!extra.timed_out || isAttemptTimeoutError(extra.error),
@@ -413,10 +414,11 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
                   model: modelSlug,
                   grounding,
                   include_web: spec.include_web,
+                  reasoning_effort: "medium",
                 },
                 xaiBaseUrl,
               );
-              record(true, { text: r.text, citations: r.citations, transport: "direct" });
+              record(true, { text: r.text, citations: r.citations, transport: "direct", reasoning_effort: "medium" });
               return { text: r.text, citations: r.citations };
             } catch (e) {
               const msg = (e as Error)?.message ?? String(e);
@@ -424,6 +426,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
                 error: msg,
                 transport: "direct",
                 timed_out: isAttemptTimeoutError(msg),
+                reasoning_effort: "medium",
               });
               throw e;
             }
