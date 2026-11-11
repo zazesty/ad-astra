@@ -182,7 +182,7 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
 }
 {
   const s = buildSlots(C({ reasoning_effort: "high" }), { max_effort: "low" });
-  ok(s.every((x) => x.reasoning_effort === "low"), "max_effort caps the CLASSIFIER's effort");
+  ok(s.every((x) => x.reasoning_effort === "low"), "max_effort caps effort");
 }
 {
   // explicit reasoning_effort is the caller's intent — it WINS over max_effort
@@ -191,27 +191,23 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
 }
 {
   const s = buildSlots(C({ reasoning_effort: "high" }), { reasoning_effort: "low" });
-  ok(s.every((x) => x.reasoning_effort === "low"), "explicit reasoning_effort overrides classifier (not raised)");
+  ok(s.every((x) => x.reasoning_effort === "low"), "explicit reasoning_effort overrides default");
 }
 {
+  // Classifier high effort does NOT touch seat effort — seats stay at default medium
   const s = buildSlots(C({ reasoning_effort: "high", suggested_panel_n: 3 }), {});
-  const sonnet = s.find((x) => /sonnet|claude/i.test(x.model_slug));
-  const gpt = s.find((x) => /gpt/i.test(x.model_slug));
-  const gem = s.find((x) => /gemini/i.test(x.model_slug));
-  ok(sonnet && sonnet.reasoning_effort === "medium", "classifier high caps Sonnet at medium");
-  ok(gpt && gpt.reasoning_effort === "medium", "classifier high caps GPT at medium");
-  ok(gem && gem.reasoning_effort === "medium", "classifier high caps Argon at medium");
+  ok(s.every((x) => x.reasoning_effort === "medium"), "classifier high does not alter seat effort (stays medium)");
   const sWithGrok = buildSlots(C({ reasoning_effort: "high" }), { force_x: true });
   const grok = sWithGrok.find((x) => x.model_slug === "grok");
-  ok(grok && grok.reasoning_effort === "medium", "classifier high caps Grok at medium");
+  ok(grok && grok.reasoning_effort === "medium", "grok stays at default medium under classifier high");
   const sExplicit = buildSlots(C(), { force_x: true, reasoning_effort: "high" });
   const grokExplicit = sExplicit.find((x) => x.model_slug === "grok");
-  ok(grokExplicit && grokExplicit.reasoning_effort === "high", "explicit reasoning_effort keeps Grok high");
+  ok(grokExplicit && grokExplicit.reasoning_effort === "high", "explicit reasoning_effort sets Grok to high");
 }
 {
+  // Classifier low effort does NOT touch seat effort — seats stay at default medium
   const s = buildSlots(C({ reasoning_effort: "low", suggested_panel_n: 3 }), {});
-  const gpt = s.find((x) => /gpt/i.test(x.model_slug));
-  ok(gpt && gpt.reasoning_effort === "low", "classifier low is not raised on GPT");
+  ok(s.every((x) => x.reasoning_effort === "medium"), "classifier low does not alter seat effort (stays medium)");
 }
 {
   const s = buildSlots(C(), { force_x: true, force_grounding: true });

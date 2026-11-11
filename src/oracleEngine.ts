@@ -288,17 +288,12 @@ function reasoningSeat(slug: string, idx: number, lens: string, effort: Effort, 
  */
 export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] {
   const lens = ov.lens ?? c.suggested_lens;
-  // Explicit reasoning_effort is the caller's own intent — it WINS over max_effort.
-  // max_effort caps ONLY the classifier's suggestion (spec §3/§7), never an
-  // explicit force. (Was: capEffort(ov.reasoning_effort ?? c…, max) — that wrongly
-  // capped an explicit force too.)
+  // Classifier evaluates difficulty for route transparency and sizing, but NEVER
+  // touches model effort. Models stay at their standing defaults (medium) unless
+  // the caller explicitly requested reasoning_effort (or max_effort).
   const explicitEffort = ov.reasoning_effort;
-  const effort = explicitEffort ?? capEffort(c.reasoning_effort, ov.max_effort);
-  // Sol's own default is medium, and Sonnet is sent medium. Argon high missed
-  // the 40s chat abort (2026-10-13 bakeoff median 48.5s). Grok 4.7 high deterministically
-  // exceeds 48s. Cap them all to medium unless the caller set reasoning_effort explicitly.
-  const effortFor = (slug: string): Effort =>
-    !explicitEffort && /gpt|openai|sonnet|claude|anthropic|argon|gemini|grok/i.test(slug) ? capEffort(effort, "medium") : effort;
+  const baseEffort: Effort = explicitEffort ?? capEffort("medium", ov.max_effort);
+  const effortFor = (_slug: string): Effort => baseEffort;
   const seats: Seat[] = [];
 
   // capability seats — native tools, never routed through `auto`
