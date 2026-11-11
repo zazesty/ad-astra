@@ -191,7 +191,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     {
       title: "Ask Panel (multi-model)",
       description:
-        "One question, many models. Leave specs EMPTY to auto-fill at most four, once: Grok (grok-4.7, xAI direct), " +
+        "One question, many models. Leave specs EMPTY to auto-fill at most four, once: Sonnet latest, " +
         "Gemini 4 Argon, GPT Sol latest, then openrouter/auto-beta. The classifier picks 1–4. " +
         "Pass min_perspectives to ask for more, up to 8; past four that same four repeats. " +
         "OR name models in specs and those seats answer the same prompt (a spec prompt overrides that one seat). " +

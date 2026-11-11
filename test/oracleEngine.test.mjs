@@ -65,42 +65,41 @@ console.log("\nUnit: buildSlots — base / capabilities");
 
 console.log("\nUnit: buildSlots — panel sizing & overrides");
 {
-  // Default multi-seat order: grok → gemini → sol → auto-beta
+  // Grok-primary default: multi-seat = sonnet → gemini → sol → auto, NO grok opinion seat
   const s = buildSlots(C({ suggested_panel_n: 3 }), {});
   ok(s.length === 3, "panel_n=3 → 3 seats");
-  ok(s.some((x) => x.provider === "grok-direct" && !x.grok_grounding), "default panel includes a grok-direct reasoning seat");
+  ok(!s.some((x) => x.provider === "grok-direct" && !x.grok_grounding), "default panel has NO grok-direct reasoning seat (Grok-primary)");
   ok(s.some((x) => x.provider === "openrouter" && /gemini/i.test(x.model_slug)), "default panel includes a gemini seat");
   ok(s.some((x) => /gpt/i.test(x.model_slug)), "default panel includes a gpt seat");
 }
 {
-  // Sol is the 3rd named family. auto-beta is the 4th, after grok+gemini+sol.
+  // Sol is the 3rd named family. auto-beta is the 4th, after sonnet+gemini+sol.
   const s = buildSlots(C({ suggested_panel_n: 4 }), {});
   ok(s.length === 4, "panel_n=4 → 4 seats");
-  ok(/gpt/i.test(s[2].model_slug), "sol is 3rd once grok+gemini are seated");
+  ok(/gpt/i.test(s[2].model_slug), "sol is 3rd once sonnet+gemini are seated");
   ok(s[3].model_slug === "openrouter/auto-beta", "auto-beta is the 4th seat");
-  ok(s[0].provider === "grok-direct" && s[0].model_slug === "grok" && /gemini/i.test(s[1].model_slug), "default 4-seat head: grok then gemini");
-  ok(s.some((x) => x.provider === "grok-direct" && !x.grok_grounding), "default 4-seat: grok-direct reasoning seat present");
+  ok(/sonnet|claude/i.test(s[0].model_slug) && /gemini/i.test(s[1].model_slug), "default 4-seat head: sonnet then gemini");
+  ok(!s.some((x) => x.provider === "grok-direct" && !x.grok_grounding), "default 4-seat: still no grok-direct reasoning");
 }
 {
-  // Seats 5+ repeat Grok, Argon, Sol, auto-beta. Seat 8 is auto again, not a wrap to Grok.
+  // Seats 5+ repeat Sonnet, Argon, Sol, auto-beta. Seat 8 is auto again, not a wrap to Sonnet.
   const s = buildSlots(C(), { n: 8 });
   ok(s.length === 8, "n=8 → 8 seats");
-  ok(s[4].provider === "grok-direct" && s[4].model_slug === "grok", "5th seat repeats grok");
+  ok(/sonnet|claude/i.test(s[4].model_slug), "5th seat repeats sonnet");
   ok(/gemini/i.test(s[5].model_slug), "6th seat repeats gemini");
   ok(/gpt/i.test(s[6].model_slug), "7th seat repeats sol");
   ok(s[7].model_slug === "openrouter/auto-beta", "8th seat repeats auto-beta");
-  ok(s[0].id === "reason-0" && s[4].id === "reason-4", "a second grok-direct seat gets its own id");
   ok(s[3].id === "auto" && s[7].id === "auto-2", "a second auto seat gets its own id");
   ok(new Set(s.map((x) => x.id)).size === 8, "repeating cycle keeps seat ids unique");
-  ok(s.filter((x) => x.provider === "grok-direct").length === 2, "repeated cycle has two grok opinion seats");
+  ok(!s.some((x) => x.provider === "grok-direct"), "repeated cycle still has no grok opinion seat");
   const nine = buildSlots(C(), { n: 9 });
-  ok(nine[8].provider === "grok-direct" && nine[8].id !== nine[0].id, "9th seat is grok again, with its own id");
+  ok(/sonnet|claude/i.test(nine[8].model_slug) && nine[8].id !== nine[0].id, "9th seat is sonnet again, with its own id");
 }
 {
-  // A grounded Gemini is seat 1. The fill starts at Grok, then Sol, then auto, then Gemini returns.
+  // A grounded Gemini is seat 1. The fill starts at Sonnet, then Gemini returns on the next cycle.
   const s = buildSlots(C({ needs_grounding: true }), { n: 8 });
   ok(s[0].id === "gemini-grounded" && s[0].grounded === true, "grounded gemini leads");
-  ok(s[1].provider === "grok-direct" && s[1].model_slug === "grok", "after grounded gemini the next seat is grok");
+  ok(/sonnet|claude/i.test(s[1].model_slug), "after grounded gemini the next seat is sonnet");
   ok(/gpt/i.test(s[2].model_slug), "then sol");
   ok(s[3].model_slug === "openrouter/auto-beta", "then auto-beta");
   ok(/gemini/i.test(s[4].model_slug) && !s[4].grounded, "gemini returns on the next cycle as a reasoning seat");
@@ -108,18 +107,18 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
 }
 
 {
-  // default 2-seat: grok + gemini
+  // default 2-seat: sonnet + gemini
   const s = buildSlots(C({ suggested_panel_n: 2 }), {});
   ok(s.length === 2, "panel_n=2 → 2 seats");
-  ok(s[0].provider === "grok-direct" && s[0].model_slug === "grok" && /gemini/i.test(s[1].model_slug), "default 2-seat: grok + gemini");
+  ok(/sonnet|claude/i.test(s[0].model_slug) && /gemini/i.test(s[1].model_slug), "default 2-seat: sonnet + gemini");
   ok(!s.some((x) => x.model_slug === "openrouter/auto-beta"), "auto NOT used at n=2 — diversity slots fill first");
-  ok(s[0].provider === "grok-direct", "default 2-seat: grok-direct leads");
+  ok(!s.some((x) => x.provider === "grok-direct"), "default 2-seat: no grok-direct");
 }
 {
-  // 3-seat default: grok → gemini → sol. auto waits for a 4th.
+  // 3-seat Grok-primary: sonnet → gemini → sol. auto waits for a 4th.
   const s = buildSlots(C({ suggested_panel_n: 3 }), {});
   ok(s.length === 3, "panel_n=3 → 3 seats");
-  ok(s[0].provider === "grok-direct" && s[0].model_slug === "grok", "default 3-seat: grok leads");
+  ok(/sonnet|claude/i.test(s[0].model_slug), "default 3-seat: sonnet leads");
   ok(/gemini/i.test(s[1].model_slug), "default 3-seat: gemini second");
   ok(/gpt/i.test(s[2].model_slug), "default 3-seat: sol is the third");
   ok(!s.some((x) => x.model_slug === "openrouter/auto-beta"), "default 3-seat: auto is not seated yet");
@@ -132,10 +131,10 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(/gpt/i.test(s[2].model_slug), "none: gpt third");
 }
 {
-  // a grok capability seat already covers the grok family → filler adds gemini, not a 2nd grok
+  // a grok capability seat already covers the grok family → filler adds sonnet, not a 2nd grok
   const s = buildSlots(C({ needs_x: true, suggested_panel_n: 2 }), {});
   ok(s[0].id === "grok-x", "grok-x capability seat leads");
-  ok(/gemini/i.test(s[1].model_slug), "missing gemini family is the one seeded next (no redundant 2nd grok)");
+  ok(/sonnet|claude/i.test(s[1].model_slug), "missing sonnet family is the one seeded next (no redundant 2nd grok)");
 }
 {
   // exclude_family:"grok" is legacy synonym for default Grok-primary pool
@@ -170,7 +169,7 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
 {
   const raised = buildSlots(C({ suggested_panel_n: 1 }), { min_perspectives: 3 });
   ok(raised.length === 3, "min_perspectives floors a 1-seat classifier to 3");
-  ok(raised[0].provider === "grok-direct" && raised[0].model_slug === "grok" && /gemini/i.test(raised[1].model_slug) && /gpt/i.test(raised[2].model_slug), "floor of 3 is grok, gemini, sol");
+  ok(/sonnet|claude/i.test(raised[0].model_slug) && /gemini/i.test(raised[1].model_slug) && /gpt/i.test(raised[2].model_slug), "floor of 3 is sonnet, gemini, sol");
   const kept = buildSlots(C({ suggested_panel_n: 4 }), { min_perspectives: 2 });
   ok(kept.length === 4, "min_perspectives does not shrink a larger classifier pick");
   const more = buildSlots(C({ suggested_panel_n: 1 }), { min_perspectives: 8 });
@@ -196,15 +195,18 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
 }
 {
   const s = buildSlots(C({ reasoning_effort: "high", suggested_panel_n: 3 }), {});
-  const grok = s.find((x) => x.provider === "grok-direct" && !x.grok_grounding);
+  const sonnet = s.find((x) => /sonnet|claude/i.test(x.model_slug));
   const gpt = s.find((x) => /gpt/i.test(x.model_slug));
   const gem = s.find((x) => /gemini/i.test(x.model_slug));
-  ok(grok && grok.reasoning_effort === "high", "classifier high does not cap Grok at medium (stays high)");
+  ok(sonnet && sonnet.reasoning_effort === "medium", "classifier high caps Sonnet at medium");
   ok(gpt && gpt.reasoning_effort === "medium", "classifier high caps GPT at medium");
   ok(gem && gem.reasoning_effort === "medium", "classifier high caps Argon at medium");
-  const sNoGrok = buildSlots(C({ reasoning_effort: "high", suggested_panel_n: 3 }), { exclude_family: "grok" });
-  const sonnet = sNoGrok.find((x) => /sonnet|claude/i.test(x.model_slug));
-  ok(sonnet && sonnet.reasoning_effort === "medium", "classifier high caps Sonnet at medium");
+  const sWithGrok = buildSlots(C({ reasoning_effort: "high" }), { force_x: true });
+  const grok = sWithGrok.find((x) => x.model_slug === "grok");
+  ok(grok && grok.reasoning_effort === "medium", "classifier high caps Grok at medium");
+  const sExplicit = buildSlots(C(), { force_x: true, reasoning_effort: "high" });
+  const grokExplicit = sExplicit.find((x) => x.model_slug === "grok");
+  ok(grokExplicit && grokExplicit.reasoning_effort === "high", "explicit reasoning_effort keeps Grok high");
 }
 {
   const s = buildSlots(C({ reasoning_effort: "low", suggested_panel_n: 3 }), {});

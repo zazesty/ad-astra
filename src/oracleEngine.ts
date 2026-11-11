@@ -193,22 +193,22 @@ function panelFillPool(existing: Seat[]): string[] {
 }
 
 /**
- * DEFAULT reasoning fill (2026-11). Grok opinion seat is explicitly included:
- * the owner wants Grok (grok-4.7, xAI direct) in the auto-fill.
+ * DEFAULT reasoning fill (Sonnet-first, cross-family dissent).
  *
- *   multi-seat default → grok · gemini · gpt · auto-beta.
- *   With no min_perspectives the classifier stops at 4.
- *   min_perspectives above 4 walks the same four again.
+ *   1 seat (with exclude_family:"grok" legacy) → sonnet
+ *   multi-seat default → sonnet · gemini · gpt · auto-beta.
+ *   Never a grok opinion seat by default. With no min_perspectives the
+ *   classifier stops at 4. min_perspectives above 4 walks the same four again.
  *
  * The returned array is one rotation of that four, so a seat count above 4
  * repeats it. A family already seated (a grounded Gemini capability seat, or
  * a grok-x capability seat) moves to the end of the cycle, so the first pass
  * fills whoever is missing. Capability seats stay in `buildSlots` before this runs.
- * exclude_family is not on the schema. "grok" remains a legacy flag meaning
- * "no grok opinion seat" (sonnet-first pattern); "none"/"off" reaches panelFillPool for tests.
+ * exclude_family is not on the schema. "grok" remains a legacy synonym for
+ * this pool; "none"/"off" reaches panelFillPool for tests.
  */
 const CALLER_PATTERN = [
-  "grok",
+  CLAUDE_SONNET_OPENROUTER_SLUG,
   GEMINI_PRO_SLUG,
   GPT_SLUG,
   OPENROUTER_AUTO_SLUG,
@@ -295,11 +295,10 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   const explicitEffort = ov.reasoning_effort;
   const effort = explicitEffort ?? capEffort(c.reasoning_effort, ov.max_effort);
   // Sol's own default is medium, and Sonnet is sent medium. Argon high missed
-  // the 40s chat abort (2026-10-13 bakeoff median 48.5s). A classifier "high"
-  // was forcing those seats up and into the chat timeout. Cap them unless the
-  // caller set reasoning_effort.
+  // the 40s chat abort (2026-10-13 bakeoff median 48.5s). Grok 4.7 high deterministically
+  // exceeds 48s. Cap them all to medium unless the caller set reasoning_effort explicitly.
   const effortFor = (slug: string): Effort =>
-    !explicitEffort && /gpt|openai|sonnet|claude|anthropic|argon|gemini/i.test(slug) ? capEffort(effort, "medium") : effort;
+    !explicitEffort && /gpt|openai|sonnet|claude|anthropic|argon|gemini|grok/i.test(slug) ? capEffort(effort, "medium") : effort;
   const seats: Seat[] = [];
 
   // capability seats — native tools, never routed through `auto`
