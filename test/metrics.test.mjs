@@ -40,7 +40,7 @@ check("omitted argon token logs medium", loggedReasoningEffort("argon", undefine
 check("omitted sonnet logs medium", loggedReasoningEffort("~anthropic/claude-sonnet-latest", undefined) === "medium");
 check("explicit sonnet high stays high", loggedReasoningEffort("~anthropic/claude-sonnet-latest", "high") === "high");
 check("omitted sol logs medium", loggedReasoningEffort("~openai/gpt-sol-latest", undefined) === "medium");
-check("omitted grok logs high", loggedReasoningEffort("grok", undefined) === "high");
+check("omitted grok logs medium", loggedReasoningEffort("grok", undefined) === "medium");
 check("lite stays unspecified", loggedReasoningEffort("google/gemini-3.5-flash-lite", undefined) === "unspecified");
 check("explicit medium stays medium", loggedReasoningEffort("grok", "medium") === "medium");
 check("explicit low stays low", loggedReasoningEffort("~openai/gpt-sol-latest", "low") === "low");

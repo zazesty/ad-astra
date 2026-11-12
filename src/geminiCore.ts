@@ -66,6 +66,7 @@ export function wireReasoningEffort(
   const s = modelSlug ?? "";
   if (/argon/i.test(s) || s === "gemini") return "medium";
   if (/sonnet|claude/i.test(s)) return "medium";
+  if (/grok/i.test(s) || s === "grok") return "medium";
   return undefined;
 }
 

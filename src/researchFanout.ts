@@ -17,7 +17,7 @@ import {
 } from "./geminiCore.js";
 import { applyLens } from "./lenses.js";
 import {
-  CLASSIFIER_MODEL,
+  CLASSIFIER_MODEL_OR,
   CLASSIFIER_FALLBACK_MODELS,
 } from "./oracleClassifier.js";
 import {
@@ -139,7 +139,7 @@ async function decompose(
   try {
     const user = `Max legs: ${maxLegs}\n\nResearch question:\n${prompt}`;
     const r = await withTimeout(
-      callOpenRouter(openrouterApiKey, CLASSIFIER_MODEL, user, {
+      callOpenRouter(openrouterApiKey, CLASSIFIER_MODEL_OR, user, {
         system: DECOMPOSE_SYSTEM,
         models: CLASSIFIER_FALLBACK_MODELS,
         reasoning_effort: "low",
@@ -209,7 +209,7 @@ export function fanoutPhaseSeatRecords(input: {
       route_mode: "decompose",
       seat_id: "decompose",
       family: "classifier",
-      model_slug: CLASSIFIER_MODEL,
+      model_slug: CLASSIFIER_MODEL_OR,
       transport: "or",
       grounded_requested: false,
       grounding_fired: false,

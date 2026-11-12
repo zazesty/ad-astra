@@ -70,11 +70,12 @@ export class ClassifierError extends Error {
 }
 
 // Flash-lite pin SSOT: modelPins.GEMINI_FLASH_LITE_* (bump VER there only).
-// Hot path: OR primary (same gen) → on *transient* OR fail → direct SDK same gen
-// → prefilter if both die. No older-gen OR models[] cascade (streamlined 2026-08).
-// research_fanout reuses for leg *decomposition* only — limbs are flash/grounded.
+// Hot path: direct SDK (gemini-flash-lite-latest) primary → on *transient* direct fail
+// → OR fallback (google/gemini-3.5-flash-lite) → prefilter if both die.
+// research_fanout reuses for leg *decomposition* only — limbs are pro/grounded.
 // No `:free` slugs — rate-limited + latency-unstable.
-export const CLASSIFIER_MODEL = GEMINI_FLASH_LITE_OR;
+export const CLASSIFIER_MODEL = GEMINI_FLASH_LITE_DIRECT;
+export const CLASSIFIER_MODEL_OR = GEMINI_FLASH_LITE_OR;
 /** Empty: callOpenRouter only sends `models` when length > 0. Kept for import compat. */
 export const CLASSIFIER_FALLBACK_MODELS: string[] = [];
 export const CLASSIFIER_MODEL_DIRECT = GEMINI_FLASH_LITE_DIRECT;
@@ -200,31 +201,43 @@ export async function classify(
   geminiApiKey?: string,
 ): Promise<Classification> {
   let text: string;
-  try {
-    const res = await callOpenRouter(openrouterApiKey, CLASSIFIER_MODEL, prompt, {
-      system: SYSTEM_PROMPT,
-      models: CLASSIFIER_FALLBACK_MODELS,
-      response_format: RESPONSE_FORMAT as unknown as Record<string, unknown>,
-    });
-    text = res.text;
-  } catch (e) {
-    // OR→direct failover (spec: OR → direct-gemini → prefilter). Only fail over on a
-    // TRANSIENT OR failure (gateway down/5xx/429/network) and only when a Gemini key
-    // is configured — a 4xx client bug would just re-fail directly, so it propagates.
-    // If direct also fails we throw ClassifierError carrying BOTH causes, and the
-    // orchestrator drops to the regex prefilter route (degraded:true).
-    if (geminiApiKey && isTransientError(e)) {
-      try {
-        text = await classifyDirect(geminiApiKey, prompt);
-        console.error("[ask_oracle] classifier OR transient fail — direct-gemini failover succeeded");
-      } catch (e2) {
-        throw new ClassifierError(
-          `classifier transport failed (OR + direct): OR=${(e as Error).message}; direct=${(e2 as Error).message}`,
-        );
+  // Hot path: direct SDK (gemini-flash-lite-latest) primary → on transient direct fail
+  // → OR fallback (google/gemini-3.5-flash-lite) → prefilter if both die.
+  if (geminiApiKey) {
+    try {
+      text = await classifyDirect(geminiApiKey, prompt);
+    } catch (e) {
+      if (openrouterApiKey && isTransientError(e)) {
+        try {
+          console.error(`[ask_oracle] classifier direct transient fail — OR failover: ${(e as Error).message}`);
+          const res = await callOpenRouter(openrouterApiKey, CLASSIFIER_MODEL_OR, prompt, {
+            system: SYSTEM_PROMPT,
+            models: CLASSIFIER_FALLBACK_MODELS,
+            response_format: RESPONSE_FORMAT as unknown as Record<string, unknown>,
+          });
+          text = res.text;
+        } catch (e2) {
+          throw new ClassifierError(
+            `classifier transport failed (direct + OR): direct=${(e as Error).message}; OR=${(e2 as Error).message}`,
+          );
+        }
+      } else {
+        throw new ClassifierError(`classifier transport failed: ${(e as Error).message}`);
       }
-    } else {
+    }
+  } else if (openrouterApiKey) {
+    try {
+      const res = await callOpenRouter(openrouterApiKey, CLASSIFIER_MODEL_OR, prompt, {
+        system: SYSTEM_PROMPT,
+        models: CLASSIFIER_FALLBACK_MODELS,
+        response_format: RESPONSE_FORMAT as unknown as Record<string, unknown>,
+      });
+      text = res.text;
+    } catch (e) {
       throw new ClassifierError(`classifier transport failed: ${(e as Error).message}`);
     }
+  } else {
+    throw new ClassifierError("Neither Gemini nor OpenRouter API key is set.");
   }
   return parseClassification(text);
 }

@@ -595,7 +595,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         } catch (e) {
           const msg = (e as Error)?.message ?? String(e);
           const timedOut = isAttemptTimeoutError(msg);
-          record(false, { error: msg, transport: defaultTransport, timed_out: timedOut });
+          record(false, { error: msg, transport: defaultTransport, timed_out: timedOut, reasoning_effort: model === "grok" ? "medium" : undefined });
           throw e;
         }
       });

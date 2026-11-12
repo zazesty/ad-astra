@@ -64,7 +64,7 @@ export function loggedReasoningEffort(modelSlug: string | undefined, requested?:
   if (wired) return wired;
   const s = (modelSlug ?? "").toLowerCase();
   if (s.includes("sonnet") || s.includes("claude") || s.includes("anthropic")) return "medium";
-  if (s === "grok" || s.includes("grok")) return "high";
+  if (s === "grok" || s.includes("grok")) return "medium";
   if (s.includes("gpt") || s.includes("openai")) return "medium";
   return "unspecified";
 }
