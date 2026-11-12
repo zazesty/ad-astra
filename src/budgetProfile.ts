@@ -115,3 +115,14 @@ export function shortUserAgent(ua: string | undefined | null): string {
 }
 
 export { MIN_NEXT_ATTEMPT_MS };
+
+export type CallerFamily = "grok" | "claude" | "openai" | "google" | "unknown";
+
+export function callerFamilyFromUserAgent(ua: string | undefined | null): CallerFamily {
+  const s = String(ua ?? "").toLowerCase();
+  if (s.includes("grok")) return "grok";
+  if (s.includes("claude")) return "claude";
+  if (s.includes("openai") || s.includes("chatgpt")) return "openai";
+  if (s.includes("google")) return "google";
+  return "unknown";
+}

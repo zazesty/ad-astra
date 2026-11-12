@@ -8,6 +8,7 @@ import {
   CLI_BUDGET,
   CHAT_BUDGET,
   CLAUDE_BUDGET,
+  callerFamilyFromUserAgent,
 } from "../build/budgetProfile.js";
 import { canStartAttempt, capAttemptMs, MIN_NEXT_ATTEMPT_MS } from "../build/timeouts.js";
 import { applyOpusRemap, normalizePanelModel } from "../build/panel.js";
@@ -75,6 +76,15 @@ check("gemini token normalizes to argon", normalizePanelModel("gemini") === "arg
 check("argon token stays argon", normalizePanelModel("argon") === "argon");
 check("openai token normalizes to sol", normalizePanelModel("openai") === "sol");
 check("sol token stays sol", normalizePanelModel("sol") === "sol");
+
+
+check("caller grok connectors", callerFamilyFromUserAgent("grok-connectors-manager/0.1.0") === "grok");
+check("caller grok cli", callerFamilyFromUserAgent("grok-cli/1.0.77") === "grok");
+check("caller claude user", callerFamilyFromUserAgent("Claude-User") === "claude");
+check("caller openai mcp", callerFamilyFromUserAgent("openai-mcp/1.0.0") === "openai");
+check("caller google", callerFamilyFromUserAgent("Google") === "google");
+check("caller unknown curl", callerFamilyFromUserAgent("curl/8.14.1") === "unknown");
+check("caller unknown null", callerFamilyFromUserAgent(null) === "unknown");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

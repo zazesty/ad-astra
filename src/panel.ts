@@ -41,7 +41,7 @@ import {
   CLAUDE_SONNET_OPENROUTER_SLUG,
   GPT_OPENROUTER_SLUG,
 } from "./modelPins.js";
-import { CLI_BUDGET, type BudgetProfile } from "./budgetProfile.js";
+import { CLI_BUDGET, type BudgetProfile, type CallerFamily } from "./budgetProfile.js";
 
 // Per-attempt OpenRouter abort for ALL panel OR seats (grounded + ungrounded).
 // History: default OR_ATTEMPT_TIMEOUT_MS=15s was a hang detector sized for short
@@ -80,6 +80,7 @@ type RegisterOpts = {
   geminiTransport: GeminiTransport;
   xaiBaseUrl?: string;
   budget?: BudgetProfile;
+  callerFamily?: CallerFamily;
 };
 
 /** Public enum is argon and sol. Stale gemini and openai tokens still run those seats. */
@@ -191,8 +192,9 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     {
       title: "Ask Panel (multi-model)",
       description:
-        "One question, many models. Leave specs EMPTY to auto-fill at most four, once: Sonnet latest, " +
-        "Gemini 4 Argon, GPT Sol latest, then openrouter/auto-beta. The classifier picks 1–4. " +
+        "One question, many models. Leave specs EMPTY to auto-fill at most four heterogeneous frontier models, " +
+        "excluding the calling client's family (collaborators drawn from Grok, Sonnet, Argon, and Sol, with " +
+        "openrouter/auto-beta as the overflow wildcard). The classifier picks 1–4. " +
         "Pass min_perspectives to ask for more, up to 8; past four that same four repeats. " +
         "OR name models in specs and those seats answer the same prompt (a spec prompt overrides that one seat). " +
         "Specs together with min_perspectives, force_grounding, engine, or fusion_preset FAILS — name the models, " +
@@ -301,6 +303,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
               force_grounding: args.force_grounding,
               engine: args.engine,
               fusion_preset: args.fusion_preset,
+              caller_family: opts.callerFamily,
             },
           );
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };

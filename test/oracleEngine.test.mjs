@@ -218,6 +218,61 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(s.every((x) => x.lens === "austrian"), "ov.lens overrides lens on every seat");
 }
 
+
+{
+  // Caller awareness: Claude caller -> Grok leads, then Argon, then Sol (no Claude/Sonnet seat)
+  const s = buildSlots(C({ suggested_panel_n: 3 }), { caller_family: "claude" });
+  ok(s.length === 3, "claude caller n=3");
+  ok(s[0].provider === "grok-direct" && s[0].model_slug === "grok", "claude caller: grok leads");
+  ok(/gemini/i.test(s[1].model_slug), "claude caller: gemini second");
+  ok(/gpt/i.test(s[2].model_slug), "claude caller: sol third");
+  ok(!s.some((x) => /claude|sonnet/i.test(x.model_slug)), "claude caller: no sonnet seat");
+}
+{
+  // Caller awareness: OpenAI/GPT caller -> Grok leads, then Sonnet, then Argon (no GPT/Sol seat)
+  const s = buildSlots(C({ suggested_panel_n: 3 }), { caller_family: "openai" });
+  ok(s.length === 3, "openai caller n=3");
+  ok(s[0].provider === "grok-direct" && s[0].model_slug === "grok", "openai caller: grok leads");
+  ok(/claude|sonnet/i.test(s[1].model_slug), "openai caller: sonnet second");
+  ok(/gemini/i.test(s[2].model_slug), "openai caller: gemini third");
+  ok(!s.some((x) => /gpt/i.test(x.model_slug)), "openai caller: no gpt seat");
+}
+{
+  // Caller awareness: Google/Gemini caller -> Grok leads, then Sonnet, then Sol (no Gemini/Argon seat)
+  const s = buildSlots(C({ suggested_panel_n: 3 }), { caller_family: "google" });
+  ok(s.length === 3, "google caller n=3");
+  ok(s[0].provider === "grok-direct" && s[0].model_slug === "grok", "google caller: grok leads");
+  ok(/claude|sonnet/i.test(s[1].model_slug), "google caller: sonnet second");
+  ok(/gpt/i.test(s[2].model_slug), "google caller: sol third");
+  ok(!s.some((x) => /gemini/i.test(x.model_slug)), "google caller: no gemini seat");
+}
+{
+  // Caller awareness: Grok caller -> Sonnet leads, then Argon, then Sol (no Grok seat)
+  const s = buildSlots(C({ suggested_panel_n: 3 }), { caller_family: "grok" });
+  ok(s.length === 3, "grok caller n=3");
+  ok(/claude|sonnet/i.test(s[0].model_slug), "grok caller: sonnet leads");
+  ok(/gemini/i.test(s[1].model_slug), "grok caller: gemini second");
+  ok(/gpt/i.test(s[2].model_slug), "grok caller: sol third");
+  ok(!s.some((x) => x.provider === "grok-direct"), "grok caller: no grok opinion seat");
+}
+{
+  // Caller awareness n=1
+  const sGrok = buildSlots(C({ suggested_panel_n: 1 }), { caller_family: "grok" });
+  ok(/claude|sonnet/i.test(sGrok[0].model_slug), "grok caller n=1 -> sonnet");
+  const sClaude = buildSlots(C({ suggested_panel_n: 1 }), { caller_family: "claude" });
+  ok(sClaude[0].provider === "grok-direct", "claude caller n=1 -> grok");
+  const sOpenai = buildSlots(C({ suggested_panel_n: 1 }), { caller_family: "openai" });
+  ok(sOpenai[0].provider === "grok-direct", "openai caller n=1 -> grok");
+  const sGoogle = buildSlots(C({ suggested_panel_n: 1 }), { caller_family: "google" });
+  ok(sGoogle[0].provider === "grok-direct", "google caller n=1 -> grok");
+}
+{
+  // Capability seat dedup for Claude caller with grok-x
+  const s = buildSlots(C({ needs_x: true, suggested_panel_n: 2 }), { caller_family: "claude" });
+  ok(s[0].id === "grok-x", "grok-x capability seat leads");
+  ok(/gemini/i.test(s[1].model_slug), "grok family already seated by grok-x, next reasoning seat is gemini");
+}
+
 console.log("\nUnit: buildRoutePlan");
 {
   const s = buildSlots(C({ needs_x: true, needs_grounding: true, domains: ["econ"], rationale: "rx" }), {});

@@ -45,7 +45,7 @@ import {
 } from "./metrics.js";
 import { canStartAttempt, capAttemptMs, MIN_NEXT_ATTEMPT_MS, remainingMs, withTimeout } from "./timeouts.js";
 import { CLAUDE_SONNET_OPENROUTER_SLUG, GPT_OPENROUTER_SLUG, OPENROUTER_AUTO_SLUG } from "./modelPins.js";
-import { CLI_BUDGET, type BudgetProfile } from "./budgetProfile.js";
+import { CLI_BUDGET, type BudgetProfile, type CallerFamily } from "./budgetProfile.js";
 
 export type { Effort, FusionPreset };
 
@@ -80,7 +80,8 @@ export interface OracleOverrides {
   force_x?: boolean;        // force a direct-Grok x_search seat
   force_grounding?: boolean; // force a grounded-Gemini seat (Google-native via OR)
   synthesize?: boolean;     // true → merge into one answer (headless callers); default raw
-  exclude_family?: string;  // "grok" → drop same-family REASONING seats (Grok-caller case; see grokCallerPool)
+  exclude_family?: string;  // legacy string override
+  caller_family?: CallerFamily; // caller family: grok, claude, openai, google
   engine?: "fusion";        // opt-in OR Fusion reasoning engine (replaces reasoning pool)
   fusion_preset?: FusionPreset; // fusion panel tier; ignored unless engine:"fusion"
 }
@@ -207,20 +208,36 @@ function panelFillPool(existing: Seat[]): string[] {
  * exclude_family is not on the schema. "grok" remains a legacy synonym for
  * this pool; "none"/"off" reaches panelFillPool for tests.
  */
-const CALLER_PATTERN = [
+export const GROK_CALLER_PATTERN = [
   CLAUDE_SONNET_OPENROUTER_SLUG,
   GEMINI_PRO_SLUG,
   GPT_SLUG,
   OPENROUTER_AUTO_SLUG,
 ];
 
-/** Preserved sonnet-first pattern for legacy exclude_family:"grok" (no grok opinion seat). */
-const NO_GROK_CALLER_PATTERN = [
-  CLAUDE_SONNET_OPENROUTER_SLUG,
+export const CLAUDE_CALLER_PATTERN = [
+  "grok",
   GEMINI_PRO_SLUG,
   GPT_SLUG,
   OPENROUTER_AUTO_SLUG,
 ];
+
+export const OPENAI_CALLER_PATTERN = [
+  "grok",
+  CLAUDE_SONNET_OPENROUTER_SLUG,
+  GEMINI_PRO_SLUG,
+  OPENROUTER_AUTO_SLUG,
+];
+
+export const GOOGLE_CALLER_PATTERN = [
+  "grok",
+  CLAUDE_SONNET_OPENROUTER_SLUG,
+  GPT_SLUG,
+  OPENROUTER_AUTO_SLUG,
+];
+
+const CALLER_PATTERN = GROK_CALLER_PATTERN;
+const NO_GROK_CALLER_PATTERN = GROK_CALLER_PATTERN;
 
 function familyAlreadySeated(existing: Seat[], slug: string): boolean {
   if (isAutoSlug(slug)) return existing.some((s) => isAutoSlug(s.model_slug));
@@ -237,18 +254,42 @@ function familyAlreadySeated(existing: Seat[], slug: string): boolean {
   return false;
 }
 
+export function resolveCallerFamily(ov: OracleOverrides): CallerFamily {
+  if (ov.caller_family) return ov.caller_family;
+  if (ov.exclude_family === "grok") return "grok";
+  if (ov.exclude_family === "claude" || ov.exclude_family === "sonnet") return "claude";
+  if (ov.exclude_family === "openai" || ov.exclude_family === "gpt" || ov.exclude_family === "sol") return "openai";
+  if (ov.exclude_family === "google" || ov.exclude_family === "gemini" || ov.exclude_family === "argon") return "google";
+  return "unknown";
+}
+
+export function patternForCaller(caller: CallerFamily): string[] {
+  switch (caller) {
+    case "claude":
+      return CLAUDE_CALLER_PATTERN;
+    case "openai":
+      return OPENAI_CALLER_PATTERN;
+    case "google":
+      return GOOGLE_CALLER_PATTERN;
+    case "grok":
+    default:
+      return GROK_CALLER_PATTERN;
+  }
+}
+
+export function callerAwarePool(caller: CallerFamily, existing: Seat[]): string[] {
+  const pattern = patternForCaller(caller);
+  const open = pattern.filter((slug) => !familyAlreadySeated(existing, slug));
+  const taken = pattern.filter((slug) => familyAlreadySeated(existing, slug));
+  return open.length === 0 ? [...pattern] : [...open, ...taken];
+}
+
 function defaultCallerPool(existing: Seat[]): string[] {
-  // Already-seated families (a grounded Argon capability seat or grok-x) move to the
-  // end of the cycle, so the first pass fills the families still missing.
-  const open = CALLER_PATTERN.filter((slug) => !familyAlreadySeated(existing, slug));
-  const taken = CALLER_PATTERN.filter((slug) => familyAlreadySeated(existing, slug));
-  return open.length === 0 ? [...CALLER_PATTERN] : [...open, ...taken];
+  return callerAwarePool("grok", existing);
 }
 
 function noGrokCallerPool(existing: Seat[]): string[] {
-  const open = NO_GROK_CALLER_PATTERN.filter((slug) => !familyAlreadySeated(existing, slug));
-  const taken = NO_GROK_CALLER_PATTERN.filter((slug) => familyAlreadySeated(existing, slug));
-  return open.length === 0 ? [...NO_GROK_CALLER_PATTERN] : [...open, ...taken];
+  return callerAwarePool("grok", existing);
 }
 /** @deprecated alias — same as defaultCallerPool. */
 const grokCallerPool = defaultCallerPool;
@@ -333,13 +374,13 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   // grok-direct, for tests only.
   // n=1 without that flag keeps cheap openrouter/auto-beta.
   const fullCrossFamily = ov.exclude_family === "none" || ov.exclude_family === "off";
-  const noGrokFamily = ov.exclude_family === "grok";
+  const caller = resolveCallerFamily(ov);
   const pool = fullCrossFamily
     ? target >= 2
       ? panelFillPool(seats)
       : DEFAULT_REASONING_POOL
-    : noGrokFamily
-      ? noGrokCallerPool(seats)
+    : caller !== "unknown"
+      ? callerAwarePool(caller, seats)
       : target >= 2
         ? defaultCallerPool(seats)
         : DEFAULT_REASONING_POOL;

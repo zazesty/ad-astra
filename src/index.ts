@@ -16,7 +16,9 @@ import { registerStandingTodoAdd } from "./standingTodo.js";
 import {
   budgetProfileFromUserAgent,
   shortUserAgent,
+  callerFamilyFromUserAgent,
   type BudgetProfile,
+  type CallerFamily,
 } from "./budgetProfile.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
@@ -41,7 +43,7 @@ function loadAstraIcon(): { png: Buffer; dataUri: string } | null {
 
 const ASTRA_ICON = loadAstraIcon();
 
-function buildServer(budget: BudgetProfile) {
+function buildServer(budget: BudgetProfile, callerFamily?: CallerFamily) {
   const server = new McpServer({
     name: "grok-mcp-remote",
     title: "Astra",
@@ -88,6 +90,7 @@ function buildServer(budget: BudgetProfile) {
     geminiTransport: GEMINI_TRANSPORT,
     xaiBaseUrl: XAI_BASE_URL,
     budget,
+    callerFamily,
   });
 
   // On-demand news digest. Reuses the same Gemini/Grok cores + transport as
@@ -174,19 +177,20 @@ app.post(MCP_PATHS, async (req, res) => {
   const rawUa = req.get("user-agent");
   const ua = shortUserAgent(rawUa);
   const budget = budgetProfileFromUserAgent(rawUa);
+  const callerFamily = callerFamilyFromUserAgent(rawUa);
   const method = typeof req.body?.method === "string" ? req.body.method : "?";
   const tool = typeof req.body?.params?.name === "string" ? req.body.params.name : "-";
   const t0 = Date.now();
   let finished = false;
   if (SLOW_TOOLS.has(tool) || tool === "-") {
-    console.error(`[mcp] start method=${method} tool=${tool} ua=${ua} profile=${budget.name}`);
+    console.error(`[mcp] start method=${method} tool=${tool} ua=${ua} caller=${callerFamily} profile=${budget.name}`);
   }
-  const server = buildServer(budget);
+  const server = buildServer(budget, callerFamily);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => {
     if (!finished) {
       console.error(
-        `[mcp] client-closed-early method=${method} tool=${tool} ua=${ua} profile=${budget.name} ms=${Date.now() - t0}`,
+        `[mcp] client-closed-early method=${method} tool=${tool} ua=${ua} caller=${callerFamily} profile=${budget.name} ms=${Date.now() - t0}`,
       );
     }
     transport.close();
@@ -197,11 +201,11 @@ app.post(MCP_PATHS, async (req, res) => {
     await transport.handleRequest(req, res, req.body);
     finished = true;
     if (SLOW_TOOLS.has(tool) || tool === "-") {
-      console.error(`[mcp] done method=${method} tool=${tool} ua=${ua} profile=${budget.name} ms=${Date.now() - t0}`);
+      console.error(`[mcp] done method=${method} tool=${tool} ua=${ua} caller=${callerFamily} profile=${budget.name} ms=${Date.now() - t0}`);
     }
   } catch (e) {
     console.error(
-      `[mcp] handler-error method=${method} tool=${tool} ua=${ua} profile=${budget.name} ms=${Date.now() - t0}: ${(e as Error).message}`,
+      `[mcp] handler-error method=${method} tool=${tool} ua=${ua} caller=${callerFamily} profile=${budget.name} ms=${Date.now() - t0}: ${(e as Error).message}`,
     );
     throw e;
   }
