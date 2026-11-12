@@ -56,20 +56,20 @@ export const CLI_BUDGET: BudgetProfile = {
 
 /**
  * Grok chat / unknown HTTP clients. Outer 50s so JSON flushes before a ~60s
- * client hangup. OR abort 40s leaves serialize margin; too little for failover
- * (see MIN_NEXT_ATTEMPT_MS).
+ * client hangup. Single-attempt fail-fast: 48s attempt timeout leaves 2s serialize
+ * and flush margin before the 50s outer ceiling.
  */
 export const CHAT_BUDGET: BudgetProfile = {
   name: "chat",
   panelOuterMs: 50_000,
-  panelOrAttemptMs: 40_000,
+  panelOrAttemptMs: 48_000,
   panelGrokSeatMs: 50_000,
   panelGeminiSeatMs: 50_000,
   panelOpenaiSeatMs: 50_000,
   panelClaudeSeatMs: 50_000,
   oracleOuterMs: 50_000,
   oracleSlotMs: 50_000,
-  oracleOrAttemptMs: 40_000,
+  oracleOrAttemptMs: 48_000,
   oracleGrokReasoningMs: 50_000,
   oracleCapabilityMs: 50_000,
   oracleFusionMs: 50_000,
@@ -81,19 +81,20 @@ export const CHAT_BUDGET: BudgetProfile = {
 /**
  * Claude chat (claude.ai custom connector) & Claude Code (`Claude-User` UA).
  * Both die near 60s broker timeout. Fanout outer 55s gives legs/synth maximum room
- * while returning before broker disconnect. Panel/oracle stay on 50s chat envelope.
+ * while returning before broker disconnect. Panel/oracle stay on 50s chat envelope
+ * with 48s single attempt.
  */
 export const CLAUDE_BUDGET: BudgetProfile = {
   name: "claude",
   panelOuterMs: 50_000,
-  panelOrAttemptMs: 40_000,
+  panelOrAttemptMs: 48_000,
   panelGrokSeatMs: 50_000,
   panelGeminiSeatMs: 50_000,
   panelOpenaiSeatMs: 50_000,
   panelClaudeSeatMs: 50_000,
   oracleOuterMs: 50_000,
   oracleSlotMs: 50_000,
-  oracleOrAttemptMs: 40_000,
+  oracleOrAttemptMs: 48_000,
   oracleGrokReasoningMs: 50_000,
   oracleCapabilityMs: 50_000,
   oracleFusionMs: 50_000,
