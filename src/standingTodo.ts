@@ -32,6 +32,7 @@ interface TodoItem {
   id?: string;
   title?: string;
   status?: string;
+  author?: string;
 }
 
 export function readOpenItems(todosPath: string): TodoItem[] {
@@ -62,9 +63,16 @@ const nextSchema = z
   .max(400)
   .refine((s) => !/[\r\n]/.test(s), "next must be one line");
 
+const authorSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .refine((s) => !/[\r\n]/.test(s), "author must be one line");
+
 export type AddResult =
-  | { ok: true; id: string; duplicate: false; open: number; owner: "agent"; priority: 3 }
-  | { ok: true; id: string; duplicate: true; open: number; owner: "agent"; priority: 3 }
+  | { ok: true; id: string; duplicate: false; open: number; owner: "agent"; priority: 3; author: string }
+  | { ok: true; id: string; duplicate: true; open: number; owner: "agent"; priority: 3; author: string | null }
   | { ok: false; error: "open_cap"; open: number; cap: number };
 
 export async function addStandingTodo(input: {
@@ -74,7 +82,16 @@ export async function addStandingTodo(input: {
   scriptPath?: string;
   cap?: number;
 }): Promise<AddResult> {
-  const title = titleSchema.parse(input.title);
+  // Keep the deployed tool surface stable: creators sign the existing title
+  // argument as "[Name / agent] Work title". Store the signature separately so
+  // deduplication and the board title stay independent of the caller.
+  const signedTitle = titleSchema.parse(input.title);
+  const signature = /^\[([^\]\r\n]+)\]\s+(.+)$/.exec(signedTitle);
+  if (!signature) {
+    throw new Error('Sign the todo title as "[Your name / agent] Work title". The author is stored separately.');
+  }
+  const author = authorSchema.parse(signature[1]);
+  const title = titleSchema.parse(signature[2]);
   const next = input.next === undefined ? undefined : nextSchema.parse(input.next);
   const todosPath = input.todosPath ?? defaultTodosPath();
   const scriptPath = input.scriptPath ?? process.env.STANDING_TODOS_SH ?? DEFAULT_SCRIPT;
@@ -91,13 +108,14 @@ export async function addStandingTodo(input: {
       open: openItems.length,
       owner: "agent",
       priority: 3,
+      author: existing.author ?? null,
     };
   }
   if (openItems.length >= cap) {
     return { ok: false, error: "open_cap", open: openItems.length, cap };
   }
 
-  const args = ["add", title, "--owner", "agent", "--priority", "3"];
+  const args = ["add", title, "--author", author, "--owner", "agent", "--priority", "3"];
   if (next) args.push("--next", next);
 
   let stdout: string;
@@ -117,7 +135,7 @@ export async function addStandingTodo(input: {
   if (!id) throw new Error("standing-todos.sh returned no id");
 
   const open = readOpenItems(todosPath).length;
-  return { ok: true, id, duplicate: false, open, owner: "agent", priority: 3 };
+  return { ok: true, id, duplicate: false, open, owner: "agent", priority: 3, author };
 }
 
 export function registerStandingTodoAdd(server: any) {
