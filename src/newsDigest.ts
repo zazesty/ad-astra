@@ -501,19 +501,28 @@ export function registerNewsDigest(server: any, deps: SummarizeDeps & { z: typeo
     {
       title: "Get News Digest",
       description:
-        "On-demand, COMPRESSED digest of a curated set of RSS feeds (AI/frontier, macro/finance heterodox, light industry), to replace compulsive feed-scrolling with one quiet scan in the inbox. Fetches a recency window (default: at least the last 4 days, auto-extending back to the previous run if that was longer ago), dedupes, and has an LLM compress (NOT amplify) the items into a short, high-signal digest. It NEVER web-searches — the curated feed list is the entire source set, by design; selective by design (it culls marginal items and stays quiet when quiet rather than padding). " +
-        "TWO DELIVERY MODES, set by `email`: " +
-        "(1) email:true (default) — the full digest is emailed to the configured recipient (the server's NOTIFY_EMAIL_TO address) and this tool returns ONLY a short confirmation (per-section counts, window, recipient). This is the token-saving path: the digest lands in the inbox, NOT in the model context. If the send fails, the full digest is returned inline instead so nothing is lost. " +
-        "(2) email:false — the full digest is returned inline and no email is sent. " +
-        "Sends exactly ONE email per call ('once' = one message per invocation); there is NO de-duplication across calls, so repeated calls with overlapping windows may resend the same items. On-demand only; there is no schedule. (Throughout, 'you'/'the previous run' refer to the configured user / that user's prior call.)",
+        "Compress curated RSS feeds (AI/frontier, heterodox macro/finance, light industry) into a selective, " +
+          "high-signal digest. No web search: curated feeds are the entire source set. Feed items are deduplicated; " +
+          "marginal items are culled and quiet windows are not padded. Covers at least the requested days (default 4), " +
+          "extending back to the configured user's previous call if older. email:true (default) emails the full digest " +
+          "to the configured recipient and returns only section counts, window and recipient; send failure returns the " +
+          "full digest inline. email:false returns it inline without email. email:true sends one email per invocation; " +
+          "repeated calls are NOT deduplicated and overlapping windows can resend items. On-demand only, with no " +
+          "schedule.",
       inputSchema: {
-        days: z.number().int().min(1).max(30).optional().describe("Minimum recency window in days (default 4). This is a FLOOR: the digest always covers at least this many days, but automatically extends further back to the previous run if that was longer ago (so returning after two weeks catches up the whole gap; running twice in an hour still shows ~4 days, not an empty digest). Set higher (e.g. 7) to widen the floor."),
+        days: z.number().int().min(1).max(30).optional().describe("Minimum look-back days (default 4). Extends back to the previous call when older; this is a floor, not an " +
+          "incremental-only window. After two weeks away it covers the gap; repeated calls within an hour still cover " +
+          "about 4 days. Increase to widen the floor."),
         sections: z
           .array(z.enum(["ai", "macro", "industry"]))
           .optional()
-          .describe("Which sections to include (default all, render order: macro, ai, industry). Macro leads. 'ai' is capped (~half its old equal share); 'industry' is intentionally light."),
-        email: z.boolean().optional().describe("Delivery mode (default true). true = email the full digest to the configured recipient and return ONLY a short confirmation (token-saving: digest stays out of model context; on send failure it falls back to returning the digest inline). false = return the full digest inline and send no email. In-chat/interactive callers who want to READ the digest in the reply must pass false — the default keeps the content out of the model context."),
-        max_items: z.number().int().min(1).max(60).optional().describe("Global cap on items handed to the summarizer (default 24). Capped sections (industry, ai) are kept whole up to their feeds.json cap; uncapped sections (macro) take the remaining budget, fair round-robin if more than one. Raise for a fuller digest, lower for a tighter one."),
+          .describe("Sections to include (default all), rendered macro, ai, industry. Macro leads; ai is capped and industry " +
+          "intentionally light."),
+        email: z.boolean().optional().describe("Default true: email the full digest and return only confirmation; send failure returns it inline. false: " +
+          "return the full digest inline without email. Interactive callers wanting to read the digest in the reply " +
+          "must pass false."),
+        max_items: z.number().int().min(1).max(60).optional().describe("Summarizer item budget (default 24); capped AI/industry sections are kept whole, and uncapped sections share " +
+          "the remainder."),
       },
     },
     async ({ days, sections, email, max_items }: { days?: number; sections?: string[]; email?: boolean; max_items?: number }) => {

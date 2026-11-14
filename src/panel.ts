@@ -144,46 +144,46 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       z
         .enum(["grok", "argon", "sol", "sonnet"])
         .describe(
-          "Backend for this spec. 'grok' (xAI direct, grok-4.7) — contrarian; grounded:true searches X " +
-            "(+web if include_web). 'argon' (Gemini 4 Argon) — strong reasoning + best live web grounding. " +
-            "'sol' (OpenRouter, GPT Sol latest) — third-family voice. " +
-            "'sonnet' (Sonnet latest) — Claude seat, sent medium. Sonnet 5.5 at medium is faster, more capable, and cheaper per task than Sonnet 5 at high. " +
-            "sol/sonnet: no native web/X grounding (grounded:true errors).",
+          "Backend: 'grok' (xAI direct, grok-4.7; contrarian, live X when grounded); 'argon' (Gemini 4 Argon; " +
+          "reasoning/live web); 'sol' (OpenRouter, GPT Sol latest); 'sonnet' (Sonnet latest, medium). Grok can add web " +
+          "with include_web. sol/sonnet have no native web/X grounding: grounded:true errors.",
         ),
     ),
     prompt: z
       .string()
       .refine((s) => s.trim().length > 0, { message: "prompt must not be empty or whitespace-only" })
       .optional()
-      .describe("Overrides the shared prompt for this seat only. Omit to use the top-level prompt. For grounded specs that override it, state the current date and ask for sources."),
+      .describe("Override the shared question for this seat. If grounded, state the current date and ask for sources. Omit to " +
+          "use prompt."),
     label: z
       .string()
       .optional()
-      .describe("Short tag for this spec in the results array. Defaults to the model name. Give distinct labels when the same model appears more than once (e.g. 'grok-cold', 'grok-hot')."),
+      .describe("Result label; defaults to model name. Use distinct labels for repeated models, e.g. 'grok-cold' and " +
+          "'grok-hot'."),
     grounded: z
       .boolean()
       .optional()
       .describe(
-        "Back the answer with LIVE retrieval. For ANYTHING factual/current set true. " +
-          "Gemini → Google Search; Grok → X (+web if include_web), auto mode (search only if needed). " +
-          "sol/sonnet → not supported (errors). Default false.",
+        "Set true for factual/current questions to use live retrieval. Argon uses Google Search; Grok uses X (+web " +
+          "with include_web), in auto mode (search if needed). sol/sonnet error if true. Default false.",
       ),
     include_web: z
       .boolean()
       .optional()
-      .describe("Grok + grounded only: also search the general web, not just X. Use for broad factual grounding (X alone is a social/breaking-news channel, not general retrieval)."),
+      .describe("Grok + grounded only: also search the general web. Use for broad factual retrieval; X alone covers " +
+          "social/breaking news."),
     system: z
       .string()
       .optional()
-      .describe("Optional system instruction for this spec — persona, tone, output format, constraints."),
-    lens: z.string().optional().describe(buildLensParamDescription()),
+      .describe("Per-seat system instruction: persona, tone, format or constraints. Overrides top-level system for this seat."),
+    lens: z.string().optional().describe("Per-seat frame; choices are in top-level lens. Omit to inherit top-level lens; if neither is set, use " +
+          "'default' unless a custom system is supplied. 'none' disables framing. Lens body precedes system text."),
     model_slug: z
       .string()
       .optional()
       .describe(
-        "Advanced: override the exact model id (grok-*, gemini-*, OpenRouter openai/* or anthropic/* slug). " +
-          "Omit unless you know the exact slug — server defaults are almost always right " +
-          "(sol→GPT Sol latest, sonnet→Sonnet latest, argon→Gemini 4 Argon).",
+        "Advanced exact model-id override (grok-*, gemini-*, OpenRouter openai/* or anthropic/*). Omit unless known: " +
+          "defaults are GPT Sol latest, Sonnet latest and Gemini 4 Argon for sol/sonnet/argon.",
       ),
   });
 
@@ -192,69 +192,71 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     {
       title: "Ask Panel (multi-model)",
       description:
-        "One question, many models. Leave specs EMPTY to auto-fill at most four heterogeneous frontier models, " +
-        "excluding the calling client's family (collaborators drawn from Grok, Sonnet, Argon, and Sol, with " +
-        "openrouter/auto-beta as the overflow wildcard). The classifier picks 1–4. " +
-        "Pass min_perspectives to ask for more, up to 8; past four that same four repeats. " +
-        "OR name models in specs and those seats answer the same prompt (a spec prompt overrides that one seat). " +
-        "Specs together with min_perspectives, force_grounding, engine, or fusion_preset FAILS — name the models, " +
-        "or leave specs empty. Do not send an empty specs array. " +
-        "DEFAULT returns RAW labeled answers for YOU to synthesize. synthesize:true returns ONE merged answer. " +
-        "system is an extra instruction on every seat. lens forces a frame; omit it on the auto path and the " +
-        "classifier picks. On a named panel, a top-level lens fills any spec that omitted one. " +
-        "Live X: a spec with model 'grok' and grounded true. Web grounding on the auto path: force_grounding, " +
-        "or the classifier when the question needs live facts. engine:\"fusion\" is the slow contested-question " +
-        "escalation and only applies when specs are empty. Effort and temperature are not caller knobs. " +
-        "Multi-hop evidence → research_fanout.",
+        "Ask one question across models for independent answers, opinions or tradeoffs; use research_fanout for " +
+          "multi-hop evidence. Omit specs to let the classifier select 1–4 frontier seats, with caller-family avoidance " +
+          "in the reasoning pool: Grok, Sonnet, Argon and Sol, with openrouter/auto-beta as overflow. min_perspectives " +
+          "requests up to 8; above four repeats the same four families. Or supply nonempty specs to name models; each " +
+          "answers the shared prompt unless overridden by its spec. Named specs cannot be combined with " +
+          "min_perspectives, force_grounding, engine or fusion_preset. Default: raw labeled answers for you to " +
+          "synthesize; synthesize:true merges them. Live X: model:'grok', grounded:true. Auto-path web grounding: " +
+          "force_grounding or classifier selection for live facts. engine:'fusion' is a slower contested-question " +
+          "escalation, available only when specs is omitted. Effort and temperature are not caller knobs. See " +
+          "system/lens fields for instruction precedence. Required retrieval seats and the auto-beta wildcard may still " +
+          "match the caller family.",
       inputSchema: {
         prompt: z
           .string()
           .refine((s) => s.trim().length > 0, { message: "prompt must not be empty or whitespace-only" })
-          .describe("The question. Named specs answer it unless a spec sets its own prompt. Required."),
+          .describe("Shared question; required. A spec prompt overrides it for that seat."),
         specs: z
           .array(specSchema)
           .max(8, "at most 8 specs per panel")
           .optional()
-          .describe("Name the models, or omit to auto-fill. One spec = one model; several = those models on this prompt. An empty array fails."),
+          .describe("Named model seats (1–8), or omit for auto-fill. Each answers prompt unless its spec overrides it. An empty " +
+          "array fails."),
         synthesize: z
           .boolean()
           .optional()
-          .describe("true → ONE merged answer (judge = gemini-4-argon). Default false → raw labeled answers. (research_fanout's synthesize defaults to the opposite, true.)"),
+          .describe("true: one merged answer, judged by gemini-4-argon. Default false: raw labeled answers. research_fanout " +
+          "defaults to true."),
         system: z
           .string()
           .optional()
-          .describe("Extra instruction on every seat — persona, tone, output format, constraints. On a named panel, a spec system overrides this for that seat. Composes with the lens: lens body first, then this text."),
+          .describe("Extra system instruction on every seat; a spec system overrides it for that seat. Composes after the lens " +
+          "body."),
         min_perspectives: z
           .number()
           .int()
           .min(1)
           .max(8)
           .optional()
-          .describe("Auto path only. At least this many perspectives (1–8). Omit and the classifier decides, at most 4. Above 4 repeats the four families. The classifier may seat more than this floor. Fails if specs is also set."),
+          .describe("Auto path only: at least this many perspectives (1–8). Omit for classifier choice, at most 4. Above 4 " +
+          "repeats families; classifier may exceed the requested floor."),
         lens: z
           .string()
           .optional()
           .describe(
-            "Analytical frame. On the auto path the classifier picks one unless you set this (or 'none'). " +
-              "On a named panel this fills any spec that omitted lens. Choose one: " +
-              buildLensMenu() +
-              ". Composes with system: lens body first, then system text.",
+            "Analytical frame. Auto path: classifier chooses unless set (or 'none'). Named panel: fills specs without " +
+          "their own lens. Lens body precedes system text. Choose one: " +
+          buildLensMenu() +
+          ".",
           ),
         force_grounding: z
           .boolean()
           .optional()
-          .describe("Auto path only. Add a web-grounded Gemini seat (Google Search) that errors if no citations come back. Fails if specs is also set."),
+          .describe("Auto path only: add a web-grounded Gemini/Google Search seat that errors when no citations return."),
         engine: z
           .enum(["fusion"])
           .optional()
           .describe(
-            "Auto path only. Opt-in escalation for a genuinely contested question. Runs OpenRouter Fusion as one seat " +
-              "in place of the reasoning pool. Fails if specs is also set.",
+            "Auto path only: 'fusion' escalates a contested question by replacing the reasoning pool with one OpenRouter " +
+          "Fusion seat.",
           ),
         fusion_preset: z
           .enum(["general-budget", "general-high", "general-fast"])
           .optional()
-          .describe("Fusion tier when engine is fusion. general-budget is the default. general-fast is a latency preset, not Sol's service tier. Ignored unless engine is set. Fails if specs is also set."),
+          .describe("Fusion tier; default general-budget. Ignored unless engine is fusion. general-fast is a latency preset, not " +
+          "Sol service tier."),
       },
     },
     async (args: {

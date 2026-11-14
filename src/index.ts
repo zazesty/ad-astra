@@ -58,7 +58,13 @@ function buildServer(budget: BudgetProfile, callerFamily?: CallerFamily) {
     {
       title: "Get Odds",
       description:
-        "Current prediction-market odds for a topic. Each row has implied probability, outcome, volume, volume_unit, money (real or play), liquidity, a resolution URL, and close_date. close_date is the event or expiry date, not the live trading cutoff — markets usually stay tradeable until resolution, so do not infer \"trading closed\" from a past close_date. Default sources are polymarket and kalshi (real money, volume in USD). Optional, off unless named: manifold (play-money, volume in mana), metaculus (play-money community forecast; volume is the forecaster count; open binary and multiple-choice only), and predictit (real money, US politics; the feed publishes no volume, so volume and liquidity are null). To include an optional venue, pass the full sources list. Sorted by salience.",
+        "Current prediction-market odds for a topic, sorted by salience. Rows include implied probability, outcome, " +
+          "volume/unit, real vs play money, liquidity, resolution URL and close_date. close_date is the event/expiry " +
+          "date, NOT a live trading cutoff; a past date does not mean trading closed, since markets usually trade until " +
+          "resolution. Defaults: polymarket and kalshi (real money, USD volume). Opt-in venues: manifold (play money, " +
+          "mana volume); metaculus (play-money community forecasts, forecaster-count volume, open " +
+          "binary/multiple-choice only); predictit (real money, US politics, null volume/liquidity because its feed " +
+          "omits them). Include optional venues by passing the full sources list.",
       inputSchema: {
         query: z
           .string()

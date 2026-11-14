@@ -372,10 +372,9 @@ export function registerGetMetrics(server: any) {
     {
       title: "Get Metrics",
       description:
-        "On-demand seat execution metrics from the grok-mcp observability layer. Returns computed " +
-        "p50/p90/p99 latency, grounding-miss rate, failover rate, timeout rate, and error-class " +
-        "breakdown grouped by family/transport/route_mode/model_slug. Pull-only — no email digest. " +
-        "Covers ask_oracle and ask_panel seat executions logged to $STATE_DIRECTORY.",
+        "Read on-demand seat-execution metrics: p50/p90/p99 latency, grounding-miss, failover and timeout rates, and " +
+          "error-class breakdown, grouped by family/transport/route_mode/model_slug. Covers oracle/panel and " +
+          "research_fanout seat logs in $STATE_DIRECTORY. Pull-only; no email digest.",
       inputSchema: {
         window_days: z
           .number()
@@ -395,7 +394,7 @@ export function registerGetMetrics(server: any) {
         tool: z
           .enum(["oracle", "panel", "research_fanout"])
           .optional()
-          .describe("Filter to ask_oracle, ask_panel, or research_fanout seats only."),
+          .describe("Filter seat logs: oracle, panel, or research_fanout."),
       },
     },
     async (args: {

@@ -478,51 +478,33 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
     {
       title: "Research Fanout",
       description:
-        "USAGE: multi-angle EVIDENCE fanout on a SCOPED research question — not a general " +
-        "deep-thinker, not a live-news wire, not an opinion panel. " +
-        "Think of it as a BOUNDED PARALLEL SUBAGENT: it saves wall-clock on independent sub-questions a " +
-        "native research loop would run sequentially (native deep-research still wins when you want to STEER " +
-        "an evolving, iterative loop rather than fan out fixed legs). " +
-        "BEST: multi-hop factual/regional/technical research that benefits from parallel " +
-        "grounded sub-queries (e.g. industry+labor+tech+supply-chain in a region; " +
-        "\"current FOMC rate range with official sources\"). Classifier often plans " +
-        "leaner than max_legs when one answer suffices. " +
-        "AVOID / ROUTE ELSEWHERE: " +
-        "(1) pure or hot breaking-X sentiment → ask_panel model:grok grounded:true " +
-        "(lighter than force_x_leg through fanout — X legs under load can timeout the whole call); " +
-        "(2) strategy/opinion/tradeoff adjudication (\"Should we adopt trunk-based dev?\") → " +
-        "ask_panel with specs left empty; " +
-        "(3) extreme vagueness (\"Tell me about AI\") → re-scope first or expect " +
-        "timeout/shallow routing; " +
-        "(4) trivial textbook constants (\"boiling point of water\") → may " +
-        "grounding_miss fail-loud with degraded:true and no answer (by design, not a bug). " +
-        "FLOW: decompose ≤max_legs → parallel provider-core legs (Gemini 3.8 Flash, web-grounded; " +
-        "optional grok_x / grok_grounded; no nested tools) → synth merges + citation union " +
-        "OR synthesize:false returns raw legs. Legs fail independently; partial return + " +
-        "degraded/slots_status. Outer budget depends on client (about 50s for chat, about 55s for Claude, about 85s for Grok Build); healthy complex runs often ~30–45s; " +
-        "multi-leg = multi-call cost. lens/system = SYNTHESIS tone only (not routing). " +
-        "Check route.elapsed_ms, legs[].status, citations[], degraded.",
+        "Parallel grounded EVIDENCE for a scoped, multi-hop factual/regional/technical question, e.g. industry + " +
+          "labor + technology + supply chain in a region. Fans out fixed independent sub-questions; use native deep " +
+          "research when you need to steer an evolving iterative loop. This is not an opinion panel or live-news wire. " +
+          "Strategy/opinion/tradeoffs → ask_panel with specs omitted. Pure breaking-X sentiment → ask_panel " +
+          "model:'grok', grounded:true; fanout X legs can time out under load. Re-scope vague prompts first. Trivial " +
+          "textbook constants may fail with grounding_miss, degraded:true and no answer. Flow: decompose up to max_legs " +
+          "(fewer when sufficient), run independent parallel web-grounded Gemini 3.8 Flash legs plus optional " +
+          "grok_x/grok_grounded legs, then merge with citation union; no nested tools. synthesize:false returns raw " +
+          "legs. Independent failures yield partial results and degraded/slots_status. Inspect route.elapsed_ms, " +
+          "legs[].status, citations[] and degraded. Healthy complex runs often take 30–45s; outer budgets are " +
+          "client-dependent (~50s chat, ~55s Claude, ~85s Grok Build). Multiple legs mean multiple model calls/cost. " +
+          "lens/system affect synthesis only, never routing.",
       inputSchema: {
         prompt: z
           .string()
           .refine((s) => s.trim().length > 0, { message: "prompt must not be empty" })
           .describe(
-            "Scoped evidence-seeking research question. " +
-              "Good: \"Challenges/opportunities for precision CNC in the East Bay " +
-              "(labor, supply chain, AI/CAM, aerospace/medtech).\" " +
-              "Good: \"Current US federal funds rate target range; cite official sources.\" " +
-              "Bad/vague: \"Tell me about AI.\" " +
-              "Use ask_panel with specs left empty: \"Should we adopt trunk-based development?\" " +
-              "Use ask_panel grok+grounded for pure last-24h X reaction.",
+            "Scoped evidence-seeking question. Examples: \"East Bay precision CNC opportunities: labor, supply chain, " +
+          "AI/CAM and aerospace/medtech\"; \"Current US federal funds target range, with official sources.\" Re-scope " +
+          "\"Tell me about AI\" before calling.",
           ),
         synthesize: z
           .boolean()
           .optional()
           .describe(
-            "true (default) = one coherent answer + citation union; " +
-              "false = raw legs only (inspect/decompose further yourself). " +
-              "false is excellent for multi-hop dumps you will merge offline. " +
-              "(NOTE: ask_panel's synthesize defaults to the OPPOSITE — false.)",
+            "true (default): one coherent answer plus citation union. false: raw legs to inspect or merge yourself. " +
+          "ask_panel defaults to false.",
           ),
         max_legs: z
           .number()
@@ -531,15 +513,15 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           .max(MAX_LEGS_HARD)
           .optional()
           .describe(
-            "Max sub-queries (default 4, hard cap 5). Factual single-answer prompts often " +
-              "get fewer legs; multi-hop research may use the full cap.",
+            "Maximum sub-queries (default 4, hard cap 5). The classifier may use fewer for a single-answer question, or " +
+          "the full cap for multi-hop work.",
           ),
         lens: z
           .string()
           .optional()
           .describe(
-            "Synthesis-only frame (e.g. steelman-then-break). Does NOT change leg routing " +
-              "or grounding modes — only final answer structure/tone.",
+            "Synthesis-only frame (e.g. steelman-then-break); changes final structure/tone, never leg routing or " +
+          "grounding.",
           ),
         system: z
           .string()
@@ -549,9 +531,8 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           .boolean()
           .optional()
           .describe(
-            "Ensure ≥1 live-X (grok_x) leg. Prefer false for pure breaking-news X " +
-              "(use ask_panel model:grok grounded:true instead) — force_x_leg on hot topics " +
-              "can raise timeout risk under load. Use true when research needs web + X in one fanout.",
+            "Ensure at least one live-X grok_x leg when research needs web + X. For pure breaking-X reaction, use " +
+          "ask_panel model:'grok', grounded:true instead; hot-topic X legs can increase fanout timeout risk.",
           ),
       },
     },

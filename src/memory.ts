@@ -609,7 +609,10 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Search",
       description:
-        "Search the shared memory KB (facts, decisions, gotchas, setup — single source of truth via MCP). Hybrid search: tag filter (hard AND pre-filter) → semantic cosine rank → keyword boost/fallback. Defaults to active facts only. Returns headers + excerpts. Discovery tool — follow up with memory_retrieve for bodies. For a plain unfiltered enumeration with no keyword, prefer memory_list (cheaper, headers-only). Tags without a query → tag-filtered facts newest-first (like a filtered list, but with this tool's field weighting).",
+        "Search the shared MCP memory KB, the source of truth for facts, decisions, gotchas and setup. Hybrid " +
+          "semantic/keyword ranking follows a hard AND tag pre-filter. Defaults to active facts only; returns headers " +
+          "and excerpts. Retrieve full bodies with memory_retrieve. For unfiltered enumeration without keywords, use " +
+          "memory_list. Tags without query return matching facts newest-first with search-field weighting.",
       inputSchema: {
         query: z
           .string()
@@ -651,7 +654,8 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Retrieve",
       description:
-        "Return one complete fact by id (the stable slug used as filename and key). [[slug]] refers to this id. Includes normalized frontmatter fields + full markdown body. Call after search or when you have a [[id]]. Part of the shared MCP memory KB.",
+        "Read one complete shared-KB fact by its stable id/filename slug, also referenced as [[slug]]. Returns " +
+          "normalized frontmatter fields and the full markdown body. Use after search or with a known [[id]].",
       inputSchema: {
         id: z
           .string()
@@ -674,13 +678,20 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory Upsert",
       description:
-        "Create or update a fact in the shared MCP memory KB. On update: omitted fields are preserved; any field you pass completely replaces the previous value (tags/related arrays are replaced, not unioned — send the full desired set). Bumps updated + version. Provide clean markdown body only (no --- frontmatter block). If editing a fact retrieved via memory_retrieve, strip the frontmatter it returned before sending. This is the only write path for durable facts. Open work is not a fact: use standing_todo_add for a todo, reminder, or parking slip, never this tool. COLLISION: keyed by EXACT id (input.id, else input.name; kebab-case by convention — NOT auto-slugified). An existing id updates/merges in place; a near-duplicate id creates a SEPARATE fact — there is no fuzzy dedup, so memory_search first to avoid clobbering or duplicating a fact.",
+        "Create or update durable shared-KB facts through this sole write authority. Park todos, reminders and open " +
+          "work with standing_todo_add instead. memory_search first: collisions use the EXACT id (input.id, else " +
+          "input.name; kebab-case by convention, no automatic slugification). An existing id updates in place; a " +
+          "near-duplicate id creates a separate fact, with no fuzzy dedup. Omitted optional fields are preserved. " +
+          "Supplied tags/related replace their base lists (send the full desired set); [[links]] in content are also " +
+          "added to related. Content replaces the body; an empty description preserves the existing description. Supply " +
+          "clean markdown content without a --- frontmatter block; strip frontmatter when reusing retrieved text. Bumps " +
+          "updated and version.",
       inputSchema: {
-        id: z.string().optional().describe("Optional explicit id/slug. Defaults to sanitized `name`."),
+        id: z.string().optional().describe("Optional explicit id/slug. Defaults to exact name, without automatic slugification."),
         name: z
           .string()
           .min(1)
-          .describe("Stable kebab-case slug; also serves as the id unless id is explicitly set (e.g. 'my-new-fact'). Used for filename and lookup."),
+          .describe("Stable kebab-case name, used unchanged as id/filename unless id is supplied (e.g. 'my-new-fact')."),
         description: z.string().optional().describe("One-line summary for the index."),
         content: z
           .string()
@@ -745,7 +756,9 @@ export function registerMemoryTools(server: any) {
     {
       title: "Memory List",
       description:
-        "List fact headers (id, name, desc, tags, status, updated). Optional tag filter. Defaults to active facts only. Cheap overview or TOC builder. Use when you don't need bodies yet. No keyword/body matching — use memory_search for that. Best for full enumeration or a TOC. Part of the shared MCP memory KB.",
+        "Read shared-KB fact headers (id, name, desc, tags, status, updated), with an optional AND tag filter. " +
+          "Defaults to active facts only. Cheap full enumeration or TOC when bodies are unnecessary; keyword/body " +
+          "matching requires memory_search.",
       inputSchema: {
         tags: z.array(z.string()).optional().describe("Filter to facts having ALL listed tags. (tags only — for topic/keyword scoping use memory_search.)"),
         limit: z.number().int().min(1).max(200).optional().describe("Max facts (default 100)."),

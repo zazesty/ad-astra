@@ -144,15 +144,13 @@ export function registerStandingTodoAdd(server: any) {
     {
       title: "Add Standing Todo",
       description:
-        "Park one piece of open work on the standing-todo board (the list Grok Build ships from). " +
-        "Add-only. Not memory: never use memory_upsert, memory_search, or the KB for a todo, reminder, or parking slip. " +
-        "title is required. next is an optional one-line next step. " +
-        "Owner is always agent and priority is always 3 (not caller-set). " +
-        `Refuses when ${OPEN_ITEM_CAP} items are already open. ` +
-        "An open item with the same title is returned as a duplicate and is not added again. " +
-        "Cannot list, complete, note, or delete.",
+        "Add one piece of open work to the board Grok Build ships from. Sign title as \"[Your name / agent] Work " +
+          "title\"; the signature is stored separately as author. Use this for todos, reminders and parking slips; never " +
+          "use memory_* or the KB. Owner is always agent and priority 3. Returns an existing open same-title item as a " +
+          "duplicate; refuses new items at " + OPEN_ITEM_CAP +
+          " open. Add-only: cannot list, complete, note or delete.",
       inputSchema: {
-        title: titleSchema.describe("One-line title of the work to park."),
+        title: titleSchema.describe("Signed one-line title: \"[Your name / agent] Work title\". Signature is stored as author, separate from owner."),
         next: nextSchema
           .optional()
           .describe("Optional one-line next step. Omit when the title is enough."),
