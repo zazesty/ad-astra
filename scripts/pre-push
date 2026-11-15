@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# pre-push hook for grok-mcp: enforce clean tree, fresh live-verification stamp
+# matching the pushed commit SHA, and 100% unit tests.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+STAMP="$ROOT/.git/verified-head"
+MAX_AGE_SEC=1800
+ZERO_SHA="0000000000000000000000000000000000000000"
+
+if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
+  echo "pre-push: BLOCKED — working tree is dirty. Commit or stash before pushing." >&2
+  exit 1
+fi
+
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  [ -z "${local_sha:-}" ] && continue
+  if [ "$local_sha" = "$ZERO_SHA" ]; then
+    continue
+  fi
+  if [ ! -f "$STAMP" ]; then
+    echo "pre-push: BLOCKED — missing $STAMP. Run: node scripts/verify-live.mjs (or bash scripts/push-verified.sh)" >&2
+    exit 1
+  fi
+  python3 - "$STAMP" "$local_sha" "$MAX_AGE_SEC" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+stamp_path, local_sha, max_age = Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+try:
+    data = json.loads(stamp_path.read_text(encoding="utf-8"))
+except Exception as e:
+    sys.exit(f"pre-push: BLOCKED — unreadable {stamp_path}: {e}")
+
+if data.get("sha") != local_sha:
+    sys.exit(
+        f"pre-push: BLOCKED — verified stamp SHA {str(data.get('sha'))[:7]} != pushed SHA {local_sha[:7]}. "
+        "Run: node scripts/verify-live.mjs"
+    )
+ts_raw = str(data.get("ts") or "")
+try:
+    dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+except Exception:
+    sys.exit(f"pre-push: BLOCKED — invalid timestamp in {stamp_path}")
+age = (datetime.now(timezone.utc) - dt).total_seconds()
+if age > max_age or age < -60:
+    sys.exit(f"pre-push: BLOCKED — verification stamp is {int(age)}s old (max {max_age}s). Re-run: node scripts/verify-live.mjs")
+print(f"pre-push: verified stamp OK (sha={local_sha[:7]}, age={int(age)}s, probes={','.join(data.get('probes') or [])})")
+PY
+done
+
+cd "$ROOT"
+npm test >/dev/null
+echo "pre-push: unit tests OK — allowing push."
