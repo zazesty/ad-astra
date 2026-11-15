@@ -82,11 +82,16 @@ export const CLASSIFIER_MODEL_DIRECT = GEMINI_FLASH_LITE_DIRECT;
 
 // Regex SEEDS only (spec §1) — these never decide; the classifier does, and they
 // re-surface only as the fail-loud fallback route's capability seats.
+// live X search (grok_x_search) is deprecated: X/social recency seeds now route
+// to web grounding (`needs_grounding`) with `needs_x: false`.
 const X_SEED = /\b(latest|today|right now|breaking|on x|tweet|posted|sentiment)\b/i;
 const GROUNDING_SEED = /\b(current|as of|recent|cite|source|who is|price of)\b/i;
 
 export function prefilter(prompt: string): PrefilterSeeds {
-  return { needs_x: X_SEED.test(prompt), needs_grounding: GROUNDING_SEED.test(prompt) };
+  return {
+    needs_x: false,
+    needs_grounding: GROUNDING_SEED.test(prompt) || X_SEED.test(prompt),
+  };
 }
 
 // Structured-output contract (spec §2). Field ORDER is deliberate: `domains` is
@@ -169,8 +174,8 @@ const SYSTEM_PROMPT = [
   "Rules:",
   "- suggested_panel_n: 1 for most questions; 2-3 when genuinely contested or helped by",
   "  multiple perspectives; 3-4 only for hard, high-stakes, or sharply contested questions.",
-  "- needs_x: true ONLY for genuinely live X/Twitter data — real-time posts, current",
-  "  sentiment, a handle's recent activity. NOT for general recency or news.",
+  "- needs_x: always false (live X search / grok_x_search is deprecated; set needs_grounding: true\n" +
+  "  instead when answering requires current/live facts, recent social chatter, or news context).",
   "- needs_grounding: true ONLY when answering REQUIRES fetching current/external facts —",
   "  live data, recent events, specific figures, who/what/when lookups. FALSE for analytical,",
   "  normative, conceptual, or opinion prompts that reason from known principles ('should we…',",

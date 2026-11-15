@@ -14,7 +14,6 @@
  */
 
 import { z } from "zod";
-import { callGrok, type Grounding } from "./grokCore.js";
 import {
   callGemini,
   callGeminiViaOpenRouter,
@@ -40,6 +39,7 @@ import {
   CLAUDE_OPUS_OPENROUTER_SLUG,
   CLAUDE_SONNET_OPENROUTER_SLUG,
   GPT_OPENROUTER_SLUG,
+  GROK_OPENROUTER_SLUG,
 } from "./modelPins.js";
 import { CLI_BUDGET, type BudgetProfile, type CallerFamily } from "./budgetProfile.js";
 
@@ -59,6 +59,10 @@ function isOrOnlyWeightsModel(model: string): boolean {
 }
 
 function defaultOrSlug(model: string, modelSlug?: string): string {
+  if (model === "grok") {
+    if (!modelSlug) return GROK_OPENROUTER_SLUG;
+    return modelSlug.includes("/") ? modelSlug : `x-ai/${modelSlug}`;
+  }
   if (modelSlug) return modelSlug;
   if (model === "sol") return GPT_OPENROUTER_SLUG;
   if (model === "opus") return CLAUDE_OPUS_OPENROUTER_SLUG;
@@ -134,7 +138,6 @@ async function mapLimit<T, R>(
 
 export function registerAskPanel(server: any, opts: RegisterOpts) {
   const geminiClient: GeminiClient | null = makeGeminiClient(opts.geminiApiKey);
-  const xaiBaseUrl = opts.xaiBaseUrl;
   const geminiTransport = opts.geminiTransport;
   const budgetProfile = opts.budget ?? CLI_BUDGET;
 
@@ -144,9 +147,10 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       z
         .enum(["grok", "argon", "sol", "sonnet"])
         .describe(
-          "Backend: 'grok' (xAI direct, grok-4.7; contrarian, live X when grounded); 'argon' (Gemini 4 Argon; " +
-          "reasoning/live web); 'sol' (OpenRouter, GPT Sol latest); 'sonnet' (Sonnet latest, medium). Grok can add web " +
-          "with include_web. sol/sonnet have no native web/X grounding: grounded:true errors.",
+          "Backend: 'grok' (OpenRouter, x-ai/grok-4.7; contrarian); 'argon' (Gemini 4 Argon; " +
+          "reasoning/live web); 'sol' (OpenRouter, GPT Sol latest); 'sonnet' (Sonnet latest, medium). " +
+          "sol/sonnet/grok have no native web/X grounding: grounded:true errors (grok_x_search is deprecated; use " +
+          "'argon' grounded:true for live search).",
         ),
     ),
     prompt: z
@@ -164,14 +168,13 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .boolean()
       .optional()
       .describe(
-        "Set true for factual/current questions to use live retrieval. Argon uses Google Search; Grok uses X (+web " +
-          "with include_web), in auto mode (search if needed). sol/sonnet error if true. Default false.",
+        "Set true for factual/current questions to use live retrieval (Argon uses Google Search). " +
+          "sol/sonnet/grok error if true (grok live-X search is deprecated; use model:'argon', grounded:true). Default false.",
       ),
     include_web: z
       .boolean()
       .optional()
-      .describe("Grok + grounded only: also search the general web. Use for broad factual retrieval; X alone covers " +
-          "social/breaking news."),
+      .describe("Deprecated (no-op; grok live-X/web grounding is retired — use model:'argon', grounded:true for live web search)."),
     system: z
       .string()
       .optional()
@@ -182,8 +185,8 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .string()
       .optional()
       .describe(
-        "Advanced exact model-id override (grok-*, gemini-*, OpenRouter openai/* or anthropic/*). Omit unless known: " +
-          "defaults are GPT Sol latest, Sonnet latest and Gemini 4 Argon for sol/sonnet/argon.",
+        "Advanced exact model-id override (x-ai/grok-*, gemini-*, OpenRouter openai/* or anthropic/*). Omit unless known: " +
+          "defaults are x-ai/grok-4.7, GPT Sol latest, Sonnet latest and Gemini 4 Argon for grok/sol/sonnet/argon.",
       ),
   });
 
@@ -198,11 +201,12 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           "requests up to 8; above four repeats the same four families. Or supply nonempty specs to name models; each " +
           "answers the shared prompt unless overridden by its spec. Named specs cannot be combined with " +
           "min_perspectives, force_grounding, engine or fusion_preset. Default: raw labeled answers for you to " +
-          "synthesize; synthesize:true merges them. Live X: model:'grok', grounded:true. Auto-path web grounding: " +
-          "force_grounding or classifier selection for live facts. engine:'fusion' is a slower contested-question " +
-          "escalation, available only when specs is omitted. Effort and temperature are not caller knobs. See " +
-          "system/lens fields for instruction precedence. Required retrieval seats and the auto-beta wildcard may still " +
-          "match the caller family.",
+          "synthesize; synthesize:true merges them. Live X (grok_x_search) is deprecated; use model:'argon', " +
+          "grounded:true or force_grounding for live web search. Auto-path web grounding: force_grounding or " +
+          "classifier selection for live facts. engine:'fusion' is a slower contested-question escalation, available " +
+          "only when specs is omitted. Effort and temperature are not caller knobs. See system/lens fields for " +
+          "instruction precedence. Required retrieval seats and the auto-beta wildcard may still match the caller " +
+          "family.",
       inputSchema: {
         prompt: z
           .string()
@@ -337,13 +341,9 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           console.error(`[ask_panel] remapped opus → sonnet label=${label}`);
         }
         const defaultTransport: "or" | "direct" =
-          model === "grok"
-            ? "direct"
-            : isOrOnlyWeightsModel(model)
-              ? "or"
-              : geminiTransport === "openrouter"
-                ? "or"
-                : "direct";
+          model === "grok" || isOrOnlyWeightsModel(model) || geminiTransport === "openrouter"
+            ? "or"
+            : "direct";
         const defaultSlug = defaultOrSlug(model, modelSlug);
         // Single record path for the whole seat (incl. applyLens failures — B2).
         // degraded is per-seat (ok===false), not run-level (B1).
@@ -413,28 +413,35 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           if (error) throw new Error(error);
 
           if (model === "grok") {
-            const grounding: Grounding = spec.grounded ? "auto" : "off";
+            if (spec.grounded) {
+              const msg =
+                "grok_x_search / grounded Grok is deprecated (Grok now routes via OpenRouter without native X search). " +
+                "Use model:'argon', grounded:true for live web search, or drop grounded for weights-only Grok.";
+              record(false, { error: msg, transport: "or", model_slug: defaultSlug, reasoning_effort: "medium" });
+              throw new Error(msg);
+            }
             try {
-              const r = await callGrok(
-                opts.xaiApiKey,
-                spec.prompt,
-                {
-                  system,
-                  model: modelSlug,
-                  grounding,
-                  include_web: spec.include_web,
-                  reasoning_effort: "medium",
-                },
-                xaiBaseUrl,
-              );
-              record(true, { text: r.text, citations: r.citations, transport: "direct", reasoning_effort: "medium" });
-              return { text: r.text, citations: r.citations };
+              const r = await callOpenRouter(opts.openrouterApiKey, defaultSlug, spec.prompt, {
+                system,
+                reasoning_effort: "medium",
+                attempt_timeout_ms: capAttemptMs(t0, budget, budgetProfile.panelOrAttemptMs),
+              });
+              record(true, {
+                text: r.text,
+                citations: r.citations,
+                transport: "or",
+                model_slug: defaultSlug,
+                reasoning_effort: "medium",
+                served_tier: r.service_tier,
+              });
+              return { text: r.text, citations: r.citations, transport: "or" as const };
             } catch (e) {
               const msg = (e as Error)?.message ?? String(e);
               record(false, {
                 error: msg,
-                transport: "direct",
+                transport: "or",
                 timed_out: isAttemptTimeoutError(msg),
+                model_slug: defaultSlug,
                 reasoning_effort: "medium",
               });
               throw e;
@@ -445,8 +452,8 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           if (isOrOnlyWeightsModel(model)) {
             if (spec.grounded) {
               const msg =
-                `${model} seat has no native web/X grounding — use model:'argon' grounded:true ` +
-                "(web) or model:'grok' grounded:true (X), or drop grounded for weights-only.";
+                `${model} seat has no native web/X grounding — use model:'argon', grounded:true ` +
+                "for live web search (grok_x_search is deprecated), or drop grounded for weights-only.";
               record(false, { error: msg, transport: "or", model_slug: defaultSlug });
               throw new Error(msg);
             }
@@ -538,8 +545,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
                 throw new Error(
                   `grounding_fired:false — Gemini grounded request returned zero citations after ` +
                     `${MAX_GROUNDING_RETRIES} retries (${pathLabel}). Refusing to pass back a weights-only answer as if ` +
-                    `it were grounded; the answer may be stale/hallucinated. Retry, rephrase to demand ` +
-                    `sources, or use a grok spec.`,
+                    `it were grounded; the answer may be stale/hallucinated. Retry or rephrase to demand sources.`,
                 );
               }
             }

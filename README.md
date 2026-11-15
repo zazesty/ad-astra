@@ -7,11 +7,14 @@ transport per request.
 ## Tools
 
 - **`ask_panel`** — ask one or more models concurrently and get raw, labeled
-  answers back to synthesize yourself. Per-spec backend (`grok` | `gemini`),
-  grounding, lens, reasoning effort, temperature. One spec failing doesn't fail
-  the others.
-- **`grok_x_search`** — citations-first live X search (xAI `/responses` + `x_search`),
-  with a no-results-is-an-error contract.
+  answers back to synthesize yourself (or omit `specs` for classifier auto-routing).
+  Per-spec backend (`grok` | `argon` | `sol` | `sonnet`), web grounding (`argon`),
+  lens, `model_slug`. One spec failing doesn't fail the others.
+- **`grok_x_search`** — *(soft-deprecated 2026-11-15)* previously citations-first live X
+  search (xAI `/responses` + `x_search`); standalone tool culled in 2026-08 and
+  Grok live-X grounding soft-deprecated in 2026-11-15 when Grok switched to OpenRouter
+  (`x-ai/grok-4.7`). Use `ask_panel` with `model: "argon", grounded: true` or
+  `research_fanout` for live web search.
 - **`get_odds`** — live prediction-market odds. Defaults: Polymarket + Kalshi (real money). Optional sources: Manifold (play-money mana), Metaculus (community forecast, forecaster count), and PredictIt (real money; no published volume).
 - **`get_news_digest`** — on-demand, *compressed* read of a curated RSS feed list
   (AI/frontier, macro/heterodox, light industry). Fetches the last N days, dedupes,
@@ -29,10 +32,9 @@ All config is via environment variables in `/etc/grok-mcp.env` (template:
 
 | Var | Purpose |
 | --- | --- |
-| `XAI_API_KEY` | Grok / `grok_x_search`. **Unchanged — Grok always uses the direct xAI API.** |
-| `GEMINI_API_KEY` | Gemini on the **direct** transport (`@google/genai` SDK). |
+| `OPENROUTER_API_KEY` | Primary inference gateway (Grok `x-ai/grok-4.7`, Sol, Sonnet, Argon via OR). |
+| `GEMINI_API_KEY` | Gemini on the **direct** transport (`@google/genai` SDK) & OR→direct failover. |
 | `GEMINI_TRANSPORT` | `direct` (default) or `openrouter` — see below. |
-| `OPENROUTER_API_KEY` | Only needed when `GEMINI_TRANSPORT=openrouter`. |
 | `MCP_PATH` | Mount path(s). Treat as a credential. |
 | `RESEND_API_KEY`, `NOTIFY_EMAIL_TO` | Alert email (scripts) **and** `get_news_digest` delivery. `NOTIFY_EMAIL_FROM` optional. |
 
@@ -41,7 +43,7 @@ All config is via environment variables in `/etc/grok-mcp.env` (template:
 `ask_panel`'s **gemini** specs can reach Google two ways, chosen by
 `GEMINI_TRANSPORT`. **External behavior of `ask_panel` is identical either way** —
 same signature, same per-spec controls, same output shape. Only the transport
-for Gemini changes. **Grok is never affected.**
+for Gemini changes. Grok (`x-ai/grok-4.7`) always routes via OpenRouter.
 
 - **`direct`** (default) — first-party `@google/genai` SDK, AI Studio key auth.
   Thinking via `thinkingConfig`, grounding via the native `googleSearch` tool.

@@ -85,8 +85,10 @@ throws(
 
 console.log("\nUnit: prefilter seeds");
 {
-  ok(prefilter("what are people tweeting right now").needs_x === true, "x seed fires");
-  ok(prefilter("explain monads").needs_x === false, "x seed quiet on neutral prompt");
+  const xPrompt = prefilter("what are people tweeting right now");
+  ok(xPrompt.needs_x === false, "x seed stays false (grok_x_search deprecated)");
+  ok(xPrompt.needs_grounding === true, "x/recency keywords fall back to needs_grounding");
+  ok(prefilter("explain monads").needs_x === false && prefilter("explain monads").needs_grounding === false, "seeds quiet on neutral prompt");
   ok(prefilter("what is the current price of copper").needs_grounding === true, "grounding seed fires");
   ok(prefilter("write a haiku").needs_grounding === false, "grounding seed quiet on neutral prompt");
 }

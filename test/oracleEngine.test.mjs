@@ -49,7 +49,11 @@ console.log("\nUnit: buildSlots — base / capabilities");
 }
 {
   const s = buildSlots(C({ needs_x: true }), {});
-  ok(s.some((x) => x.id === "grok-x" && x.provider === "grok-direct" && x.grok_grounding === "required"), "needs_x → required grok-direct seat");
+  ok(
+    s.some((x) => x.id === "gemini-grounded" && x.provider === "openrouter" && x.grounded === true) &&
+      !s.some((x) => x.id === "grok-x"),
+    "needs_x → soft-deprecated, routes to grounded Gemini seat",
+  );
 }
 {
   const s = buildSlots(C({ needs_grounding: true }), {});
@@ -57,10 +61,9 @@ console.log("\nUnit: buildSlots — base / capabilities");
   ok(!!g && g.provider === "openrouter" && g.grounded === true, "needs_grounding → OR-native grounded gemini seat");
 }
 {
-  // both capabilities but classifier only asked for 1 seat — neither dropped
+  // deprecated needs_x + needs_grounding deduplicate onto one gemini-grounded seat
   const s = buildSlots(C({ needs_x: true, needs_grounding: true, suggested_panel_n: 1 }), {});
-  ok(s.length === 2, "capability seats never dropped below their count");
-  ok(s.some((x) => x.id === "grok-x") && s.some((x) => x.id === "gemini-grounded"), "both capability seats present");
+  ok(s.length === 1 && s[0].id === "gemini-grounded", "needs_x + needs_grounding collapse onto single grounded seat");
 }
 
 console.log("\nUnit: buildSlots — panel sizing & overrides");
@@ -127,14 +130,14 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   // opt-in full cross-family for non-Grok callers (exclude_family none/off)
   const s = buildSlots(C({ suggested_panel_n: 3 }), { exclude_family: "none" });
   ok(/gemini/i.test(s[0].model_slug), "none: gemini leads");
-  ok(s[1].provider === "grok-direct", "none: grok contrarian second");
+  ok(s[1].provider === "openrouter" && s[1].model_slug === "x-ai/grok-4.7", "none: grok contrarian second via OR");
   ok(/gpt/i.test(s[2].model_slug), "none: gpt third");
 }
 {
-  // a grok capability seat already covers the grok family → filler adds sonnet, not a 2nd grok
+  // deprecated needs_x adds gemini-grounded → filler adds sonnet, sol (no duplicate gemini)
   const s = buildSlots(C({ needs_x: true, suggested_panel_n: 2 }), {});
-  ok(s[0].id === "grok-x", "grok-x capability seat leads");
-  ok(/sonnet|claude/i.test(s[1].model_slug), "missing sonnet family is the one seeded next (no redundant 2nd grok)");
+  ok(s[0].id === "gemini-grounded", "deprecated needs_x seats gemini-grounded first");
+  ok(/sonnet|claude/i.test(s[1].model_slug), "missing sonnet family is seeded next");
 }
 {
   // exclude_family:"grok" is legacy synonym for default Grok-primary pool
@@ -152,15 +155,15 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(!s3.some((x) => x.provider === "grok-direct" && !x.grok_grounding), "no grok-direct REASONING seat anywhere on a grok-caller panel");
 }
 {
-  // DEFAULT keeps capability seats — grok-x is data retrieval, NOT Grok's opinion
+  // deprecated needs_x routes to gemini-grounded; reasoning fills sonnet -> sol on grok-caller panel
   const s = buildSlots(C({ needs_x: true, suggested_panel_n: 3 }), { exclude_family: "grok" });
-  ok(s[0].id === "grok-x" && s[0].provider === "grok-direct", "grok-caller STILL seats the grok-x CAPABILITY seat (data, not opinion)");
-  ok(!s.slice(1).some((x) => x.provider === "grok-direct"), "but no grok-direct REASONING seat among the rest");
-  ok(/sonnet|claude/i.test(s[1].model_slug) && /gemini/i.test(s[2].model_slug), "reasoning voices fill sonnet → gemini after the capability seat");
+  ok(s[0].id === "gemini-grounded" && s[0].provider === "openrouter", "deprecated needs_x → gemini-grounded");
+  ok(!s.slice(1).some((x) => x.provider === "grok-direct" || /grok/i.test(x.model_slug)), "no grok reasoning seat on grok-caller panel");
+  ok(/sonnet|claude/i.test(s[1].model_slug) && /gpt/i.test(s[2].model_slug), "reasoning voices fill sonnet → sol after gemini-grounded");
 }
 {
   const s = buildSlots(C({ needs_x: true, suggested_panel_n: 3 }), {});
-  ok(s.length === 3 && s[0].id === "grok-x", "capability seat counts toward panel size, listed first");
+  ok(s.length === 3 && s[0].id === "gemini-grounded", "capability seat counts toward panel size, listed first");
 }
 {
   const s = buildSlots(C(), { n: 2 });
@@ -178,7 +181,7 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
 }
 {
   const s = buildSlots(C({ needs_x: true, needs_grounding: true }), { n: 1 });
-  ok(s.length === 2, "ov.n still floored by capability seats");
+  ok(s.length === 1 && s[0].id === "gemini-grounded", "ov.n=1 kept when deprecated needs_x collapses into gemini-grounded");
 }
 {
   const s = buildSlots(C({ reasoning_effort: "high" }), { max_effort: "low" });
@@ -197,11 +200,11 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   // Classifier high effort does NOT touch seat effort — seats stay at default medium
   const s = buildSlots(C({ reasoning_effort: "high", suggested_panel_n: 3 }), {});
   ok(s.every((x) => x.reasoning_effort === "medium"), "classifier high does not alter seat effort (stays medium)");
-  const sWithGrok = buildSlots(C({ reasoning_effort: "high" }), { force_x: true });
-  const grok = sWithGrok.find((x) => x.model_slug === "grok");
+  const sWithGrok = buildSlots(C({ reasoning_effort: "high", suggested_panel_n: 2 }), { caller_family: "claude" });
+  const grok = sWithGrok.find((x) => x.model_slug === "x-ai/grok-4.7");
   ok(grok && grok.reasoning_effort === "medium", "grok stays at default medium under classifier high");
-  const sExplicit = buildSlots(C(), { force_x: true, reasoning_effort: "high" });
-  const grokExplicit = sExplicit.find((x) => x.model_slug === "grok");
+  const sExplicit = buildSlots(C(), { caller_family: "claude", reasoning_effort: "high" });
+  const grokExplicit = sExplicit.find((x) => x.model_slug === "x-ai/grok-4.7");
   ok(grokExplicit && grokExplicit.reasoning_effort === "high", "explicit reasoning_effort sets Grok to high");
 }
 {
@@ -211,7 +214,7 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
 }
 {
   const s = buildSlots(C(), { force_x: true, force_grounding: true });
-  ok(s.some((x) => x.id === "grok-x") && s.some((x) => x.id === "gemini-grounded"), "force_x + force_grounding add both seats");
+  ok(s.some((x) => x.id === "gemini-grounded") && !s.some((x) => x.id === "grok-x"), "deprecated force_x + force_grounding route to gemini-grounded");
 }
 {
   const s = buildSlots(C(), { lens: "austrian" });
@@ -220,28 +223,28 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
 
 
 {
-  // Caller awareness: Claude caller -> Grok leads, then Argon, then Sol (no Claude/Sonnet seat)
+  // Caller awareness: Claude caller -> Grok leads (via OR), then Argon, then Sol (no Claude/Sonnet seat)
   const s = buildSlots(C({ suggested_panel_n: 3 }), { caller_family: "claude" });
   ok(s.length === 3, "claude caller n=3");
-  ok(s[0].provider === "grok-direct" && s[0].model_slug === "grok", "claude caller: grok leads");
+  ok(s[0].provider === "openrouter" && s[0].model_slug === "x-ai/grok-4.7", "claude caller: grok leads via OR");
   ok(/gemini/i.test(s[1].model_slug), "claude caller: gemini second");
   ok(/gpt/i.test(s[2].model_slug), "claude caller: sol third");
   ok(!s.some((x) => /claude|sonnet/i.test(x.model_slug)), "claude caller: no sonnet seat");
 }
 {
-  // Caller awareness: OpenAI/GPT caller -> Grok leads, then Sonnet, then Argon (no GPT/Sol seat)
+  // Caller awareness: OpenAI/GPT caller -> Grok leads (via OR), then Sonnet, then Argon (no GPT/Sol seat)
   const s = buildSlots(C({ suggested_panel_n: 3 }), { caller_family: "openai" });
   ok(s.length === 3, "openai caller n=3");
-  ok(s[0].provider === "grok-direct" && s[0].model_slug === "grok", "openai caller: grok leads");
+  ok(s[0].provider === "openrouter" && s[0].model_slug === "x-ai/grok-4.7", "openai caller: grok leads via OR");
   ok(/claude|sonnet/i.test(s[1].model_slug), "openai caller: sonnet second");
   ok(/gemini/i.test(s[2].model_slug), "openai caller: gemini third");
   ok(!s.some((x) => /gpt/i.test(x.model_slug)), "openai caller: no gpt seat");
 }
 {
-  // Caller awareness: Google/Gemini caller -> Grok leads, then Sonnet, then Sol (no Gemini/Argon seat)
+  // Caller awareness: Google/Gemini caller -> Grok leads (via OR), then Sonnet, then Sol (no Gemini/Argon seat)
   const s = buildSlots(C({ suggested_panel_n: 3 }), { caller_family: "google" });
   ok(s.length === 3, "google caller n=3");
-  ok(s[0].provider === "grok-direct" && s[0].model_slug === "grok", "google caller: grok leads");
+  ok(s[0].provider === "openrouter" && s[0].model_slug === "x-ai/grok-4.7", "google caller: grok leads via OR");
   ok(/claude|sonnet/i.test(s[1].model_slug), "google caller: sonnet second");
   ok(/gpt/i.test(s[2].model_slug), "google caller: sol third");
   ok(!s.some((x) => /gemini/i.test(x.model_slug)), "google caller: no gemini seat");
@@ -253,33 +256,33 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(/claude|sonnet/i.test(s[0].model_slug), "grok caller: sonnet leads");
   ok(/gemini/i.test(s[1].model_slug), "grok caller: gemini second");
   ok(/gpt/i.test(s[2].model_slug), "grok caller: sol third");
-  ok(!s.some((x) => x.provider === "grok-direct"), "grok caller: no grok opinion seat");
+  ok(!s.some((x) => x.provider === "grok-direct" || /grok/i.test(x.model_slug)), "grok caller: no grok opinion seat");
 }
 {
   // Caller awareness n=1
   const sGrok = buildSlots(C({ suggested_panel_n: 1 }), { caller_family: "grok" });
   ok(/claude|sonnet/i.test(sGrok[0].model_slug), "grok caller n=1 -> sonnet");
   const sClaude = buildSlots(C({ suggested_panel_n: 1 }), { caller_family: "claude" });
-  ok(sClaude[0].provider === "grok-direct", "claude caller n=1 -> grok");
+  ok(sClaude[0].provider === "openrouter" && sClaude[0].model_slug === "x-ai/grok-4.7", "claude caller n=1 -> grok via OR");
   const sOpenai = buildSlots(C({ suggested_panel_n: 1 }), { caller_family: "openai" });
-  ok(sOpenai[0].provider === "grok-direct", "openai caller n=1 -> grok");
+  ok(sOpenai[0].provider === "openrouter" && sOpenai[0].model_slug === "x-ai/grok-4.7", "openai caller n=1 -> grok via OR");
   const sGoogle = buildSlots(C({ suggested_panel_n: 1 }), { caller_family: "google" });
-  ok(sGoogle[0].provider === "grok-direct", "google caller n=1 -> grok");
+  ok(sGoogle[0].provider === "openrouter" && sGoogle[0].model_slug === "x-ai/grok-4.7", "google caller n=1 -> grok via OR");
 }
 {
-  // Capability seat dedup for Claude caller with grok-x
+  // Deprecated needs_x adds gemini-grounded -> Claude caller fills Grok (via OR) next
   const s = buildSlots(C({ needs_x: true, suggested_panel_n: 2 }), { caller_family: "claude" });
-  ok(s[0].id === "grok-x", "grok-x capability seat leads");
-  ok(/gemini/i.test(s[1].model_slug), "grok family already seated by grok-x, next reasoning seat is gemini");
+  ok(s[0].id === "gemini-grounded", "gemini-grounded capability seat leads");
+  ok(s[1].provider === "openrouter" && s[1].model_slug === "x-ai/grok-4.7", "next reasoning seat for Claude caller is grok via OR");
 }
 
 console.log("\nUnit: buildRoutePlan");
 {
-  const s = buildSlots(C({ needs_x: true, needs_grounding: true, domains: ["econ"], rationale: "rx" }), {});
+  const s = buildSlots(C({ needs_x: true, needs_grounding: true, domains: ["econ"], rationale: "rx" }), { caller_family: "claude", min_perspectives: 2 });
   const r = buildRoutePlan(s, C({ needs_x: true, needs_grounding: true, domains: ["econ"], rationale: "rx" }), "classifier", "google/gemini-3.5-flash-lite");
   ok(r.mode === "panel" && r.panel_n === 2, "mode/panel_n from seat count");
-  ok(r.used_x_search === true && r.used_grounding === true, "capability flags surfaced");
-  ok(r.models.includes("grok-4.7"), "grok placeholder resolved to grok-4.7 in models[]");
+  ok(r.used_x_search === false && r.used_grounding === true, "deprecated needs_x leaves used_x_search false, used_grounding true");
+  ok(r.models.includes("x-ai/grok-4.7"), "claude panel records x-ai/grok-4.7 in models[]");
   ok(r.source === "classifier" && r.classifier_model === "google/gemini-3.5-flash-lite", "decided-by recorded");
   ok(r.classifier_error === undefined, "no error on clean path");
   ok(r.domains[0] === "econ" && r.rationale === "rx", "domains/rationale telemetry carried");
@@ -307,8 +310,8 @@ console.log("\nUnit: buildSlots — engine:fusion");
 }
 {
   const s = buildSlots(C({ needs_x: true }), { engine: "fusion", force_grounding: true });
-  ok(s.length === 3, "fusion + both capabilities → 2 capability + 1 fusion");
-  ok(s.some((x) => x.id === "grok-x") && s.some((x) => x.id === "gemini-grounded"), "capability seats kept with fusion");
+  ok(s.length === 2, "fusion + capability → 1 capability (gemini-grounded) + 1 fusion");
+  ok(s.some((x) => x.id === "gemini-grounded") && !s.some((x) => x.id === "grok-x"), "capability seat kept with fusion");
   ok(s[s.length - 1].id === "fusion", "fusion seat trails capabilities");
 }
 {
@@ -385,22 +388,22 @@ console.log("\nUnit: assemble — REALIZED capability flags (route reflects what
   const cc = C({ needs_x: true, needs_grounding: true, suggested_panel_n: 2 });
   const seats = buildSlots(cc, {});
   const route = buildRoutePlan(seats, cc, "classifier", "m");
-  ok(route.used_x_search === true && route.used_grounding === true, "planned flags both true pre-exec");
-  const grokX = seats.find((s) => s.id === "grok-x");
+  ok(route.used_x_search === false && route.used_grounding === true, "planned flags: x false (deprecated), grounding true");
   const grounded = seats.find((s) => s.id === "gemini-grounded");
-  // grounded seat TIMED OUT, grok-x ok → grounding must drop to false, x stays true
+  const sonnet = seats.find((s) => s.id !== "gemini-grounded");
+  // grounded seat TIMED OUT, sonnet ok → grounding must drop to false
   const resp = await assemble(
     {},
     route,
     [
-      { seat: grokX, status: "ok", text: "t", citations: ["c"] },
+      { seat: sonnet, status: "ok", text: "t" },
       { seat: grounded, status: "timeout", error: "timed out" },
     ],
     {},
     false,
   );
   ok(resp.route.used_grounding === false, "timed-out grounded seat → used_grounding flips to false (no lie)");
-  ok(resp.route.used_x_search === true, "ok grok-x seat → used_x_search stays true");
+  ok(resp.route.used_x_search === false, "used_x_search stays false");
   ok(resp.degraded === true, "a non-ok seat marks the response degraded");
 }
 {
@@ -418,11 +421,11 @@ console.log("\nUnit: assemble — recovery_note when OR dies and Grok recovers")
   const seats = buildSlots(cc, {});
   const route = buildRoutePlan(seats, cc, "classifier", "m");
   // Force a grok-direct + openrouter gemini pair if not already present.
-  const grokSeat = seats.find((s) => s.provider === "grok-direct") || {
+  const grokSeat = {
     id: "reason-grok",
-    provider: "grok-direct",
-    model_slug: "grok",
-    reasoning_effort: "high",
+    provider: "openrouter",
+    model_slug: "x-ai/grok-4.7",
+    reasoning_effort: "medium",
     lens: "default",
   };
   const gptSeat = {

@@ -162,7 +162,7 @@ try {
 }
 
 // 6. Live functional tools/call probes.
-async function callTool(name, argsObj, timeoutMs = 60_000) {
+async function callToolRaw(name, argsObj, timeoutMs = 60_000) {
   const resp = await mcpPost(
     {
       jsonrpc: "2.0",
@@ -174,8 +174,11 @@ async function callTool(name, argsObj, timeoutMs = 60_000) {
   );
   if (resp?.error) throw new Error(`${name} RPC error: ${JSON.stringify(resp.error)}`);
   if (resp?.result?.isError) throw new Error(`${name} returned isError: ${resp.result?.content?.[0]?.text}`);
-  const txt = resp?.result?.content?.[0]?.text || "";
-  return JSON.parse(txt);
+  return resp?.result?.content?.[0]?.text || "";
+}
+
+async function callTool(name, argsObj, timeoutMs = 60_000) {
+  return JSON.parse(await callToolRaw(name, argsObj, timeoutMs));
 }
 
 const touched = (names) => RUN_ALL || changedFiles.some((f) => names.some((n) => f.endsWith(n)));
@@ -218,8 +221,9 @@ if (touched(["panel.ts", "oracleClassifier.ts", "oracleEngine.ts", "grokCore.ts"
     },
     45_000,
   );
-  if (res?.degraded !== false) {
-    fail(`ask_panel probe degraded: ${JSON.stringify(res?.slots_status)}`);
+  const rows = Array.isArray(res) ? res : res?.results;
+  if (!Array.isArray(rows) || !rows[0]?.ok || rows[0]?.transport !== "or") {
+    fail(`ask_panel probe failed: ${JSON.stringify(res)}`);
   }
   probes.push("ask_panel");
 }
@@ -247,8 +251,8 @@ if (touched(["metrics.ts"])) {
 
 if (touched(["newsDigest.ts"])) {
   console.log("verify-live: probing get_news_digest (email=false)...");
-  const res = await callTool("get_news_digest", { days: 1, max_items: 4, email: false }, 60_000);
-  if (!res || typeof res !== "object") fail("get_news_digest probe returned invalid JSON");
+  const txt = await callToolRaw("get_news_digest", { days: 1, max_items: 4, email: false }, 60_000);
+  if (!txt || txt.trim().length < 20) fail("get_news_digest probe returned empty text");
   probes.push("get_news_digest");
 }
 

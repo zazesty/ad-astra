@@ -28,7 +28,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 // Which transport ask_panel's gemini specs use. Defaults to "direct" (@google/genai
 // SDK) until the OpenRouter BYOK path clears its verification gates; flip to
-// "openrouter" in the env to route Gemini through OpenRouter. Grok is unaffected.
+// "openrouter" in the env to route Gemini through OpenRouter. Grok routes via OR.
 const GEMINI_TRANSPORT = process.env.GEMINI_TRANSPORT === "openrouter" ? "openrouter" : "direct";
 const XAI_BASE_URL = "https://api.x.ai/v1";
 const PORT = Number(process.env.PORT ?? 3000);

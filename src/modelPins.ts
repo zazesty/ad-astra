@@ -51,3 +51,10 @@ export const GEMINI_FLASH_LITE_DIRECT = "gemini-flash-lite-latest" as const;
 
 export const GEMINI_HYDROGEN_OR = "google/gemini-4-hydrogen";
 export const GEMINI_HYDROGEN_DIRECT = "gemini-4-hydrogen";
+
+/**
+ * ask_panel / oracle / newsDigest Grok seat via OpenRouter (xAI).
+ * Switched off xAI direct (2026-11-15); grok_x_search / live-X is soft-deprecated
+ * because OpenRouter serves Grok without native X search.
+ */
+export const GROK_OPENROUTER_SLUG = "x-ai/grok-4.7";

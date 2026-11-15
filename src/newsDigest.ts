@@ -31,11 +31,13 @@ import { withTimeout } from "./timeouts.js";
 import {
   callGemini,
   callGeminiViaOpenRouter,
+  callOpenRouter,
   makeGeminiClient,
   OR_NEWS_DIGEST_ATTEMPT_TIMEOUT_MS,
   type GeminiTransport,
 } from "./geminiCore.js";
 import { callGrok } from "./grokCore.js";
+import { GROK_OPENROUTER_SLUG } from "./modelPins.js";
 import { sendEmail } from "./email.js";
 
 const FEEDS_PATH = new URL("../feeds.json", import.meta.url);
@@ -404,8 +406,17 @@ export async function summarize(userPrompt: string, deps: SummarizeDeps): Promis
         : await callGemini(makeGeminiClient(deps.geminiApiKey), userPrompt, geminiOpts);
     return { markdown: r.text, engine: `gemini:${deps.geminiTransport}` };
   } catch (gemErr) {
-    // Reuse, don't add: fall back to Grok parametric (grounding off) before giving up.
+    // Reuse, don't add: fall back to Grok via OpenRouter (grounding off) before giving up.
     try {
+      if (deps.openrouterApiKey) {
+        const r = await callOpenRouter(deps.openrouterApiKey, GROK_OPENROUTER_SLUG, userPrompt, {
+          system: COMPRESSION_SYSTEM,
+          grounded: false,
+          reasoning_effort: null,
+          attempt_timeout_ms: OR_NEWS_DIGEST_ATTEMPT_TIMEOUT_MS,
+        });
+        return { markdown: r.text, engine: "grok:openrouter" };
+      }
       const r = await callGrok(
         deps.xaiApiKey,
         userPrompt,

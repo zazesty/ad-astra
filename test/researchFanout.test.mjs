@@ -28,15 +28,15 @@ function check(name, cond) {
 console.log("Unit: research_fanout helpers + timeouts");
 
 check("coerceMode default", coerceMode("nope") === "gemini_grounded");
-check("coerceMode grok_x", coerceMode("grok_x") === "grok_x");
-check("coerceMode x alias", coerceMode("x_search") === "grok_x");
-check("coerceMode grok_grounded", coerceMode("grok") === "grok_grounded");
+check("coerceMode deprecated grok_x falls back to gemini_grounded", coerceMode("grok_x") === "gemini_grounded");
+check("coerceMode deprecated x alias falls back to gemini_grounded", coerceMode("x_search") === "gemini_grounded");
+check("coerceMode deprecated grok_grounded falls back to gemini_grounded", coerceMode("grok") === "gemini_grounded");
 
 check("dedupeCitations order+unique", JSON.stringify(dedupeCitations(["a", "b", "a", ""])) === JSON.stringify(["a", "b"]));
 
 const plans = ensureForceX([{ query: "q", mode: "gemini_grounded" }], true, 4);
-check("ensureForceX adds grok_x", plans.some((p) => p.mode === "grok_x"));
-check("ensureForceX respects max", ensureForceX([{ query: "q", mode: "gemini_grounded" }], true, 1).length === 1);
+check("ensureForceX is a deprecated no-op (no grok_x added)", plans.length === 1 && !plans.some((p) => p.mode === "grok_x"));
+check("ensureForceX preserves leg count at max=1", ensureForceX([{ query: "q", mode: "gemini_grounded" }], true, 1).length === 1);
 check("MAX_LEGS_HARD is 5", MAX_LEGS_HARD === 5);
 check("GEMINI_HYDROGEN_OR is google/gemini-4-hydrogen", GEMINI_HYDROGEN_OR === "google/gemini-4-hydrogen");
 check("GEMINI_HYDROGEN_DIRECT is gemini-4-hydrogen", GEMINI_HYDROGEN_DIRECT === "gemini-4-hydrogen");

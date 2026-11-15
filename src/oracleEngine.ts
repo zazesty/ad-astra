@@ -11,10 +11,10 @@
  *        ▼
  *   assemble     — { route, slots_status, degraded, raw? | answer? } (§6)
  *
- * Provider seam (§0): grok-direct owns x_search (+ explicit grok reasoning seats);
- * OpenRouter owns gemini (grounded/reasoning) + openrouter/auto-beta. Grounding never
- * goes gemini-direct (silent misses) — the grounded seat is OR-native with the
- * same fail-loud zero-citation retry contract ask_panel uses.
+ * Provider seam (§0): OpenRouter owns all reasoning seats (Grok x-ai/grok-4.7,
+ * Gemini, Sonnet, Sol, openrouter/auto-beta) plus grounded Gemini (with
+ * gemini-direct failover). Live X search (grok_x_search / grok-direct) is
+ * soft-deprecated and falls back to grounded Gemini.
  */
 
 import { callGrok, DEFAULT_MODEL, type Grounding } from "./grokCore.js";
@@ -44,7 +44,12 @@ import {
   type SeatMetricRecord,
 } from "./metrics.js";
 import { canStartAttempt, capAttemptMs, MIN_NEXT_ATTEMPT_MS, remainingMs, withTimeout } from "./timeouts.js";
-import { CLAUDE_SONNET_OPENROUTER_SLUG, GPT_OPENROUTER_SLUG, OPENROUTER_AUTO_SLUG } from "./modelPins.js";
+import {
+  CLAUDE_SONNET_OPENROUTER_SLUG,
+  GPT_OPENROUTER_SLUG,
+  GROK_OPENROUTER_SLUG,
+  OPENROUTER_AUTO_SLUG,
+} from "./modelPins.js";
 import { CLI_BUDGET, type BudgetProfile, type CallerFamily } from "./budgetProfile.js";
 
 export type { Effort, FusionPreset };
@@ -179,18 +184,18 @@ const DEFAULT_REASONING_POOL = [OPENROUTER_AUTO_SLUG, GEMINI_PRO_SLUG];
  * (grok, argon, sol, auto-beta).
  */
 function panelFillPool(existing: Seat[]): string[] {
-  const haveGrok = existing.some((s) => s.provider === "grok-direct");
+  const haveGrok = existing.some((s) => s.provider === "grok-direct" || isGrokSlug(s.model_slug));
   const haveGemini = existing.some((s) => s.provider === "openrouter" && /gemini/i.test(s.model_slug));
   const haveGpt = existing.some((s) => s.provider === "openrouter" && /gpt/i.test(s.model_slug));
   const head: string[] = [];
   // Gemini leads: it's the family most likely already seated by a capability seat
   // (gemini-grounded), so a 2-seat panel then pairs it with the grok contrarian.
   if (!haveGemini) head.push(GEMINI_PRO_SLUG);
-  if (!haveGrok) head.push("grok"); // the contrarian cross-family voice (grok-direct, grounding off)
+  if (!haveGrok) head.push(GROK_OPENROUTER_SLUG); // the contrarian cross-family voice (via OpenRouter)
   if (!haveGpt) head.push(GPT_SLUG);
   // Tail: auto as the first overflow wildcard, then cycle the three named families
   // so larger panels keep stacking real cross-family voices, not repeated `auto`.
-  return [...head, OPENROUTER_AUTO_SLUG, GEMINI_PRO_SLUG, "grok", GPT_SLUG];
+  return [...head, OPENROUTER_AUTO_SLUG, GEMINI_PRO_SLUG, GROK_OPENROUTER_SLUG, GPT_SLUG];
 }
 
 /**
@@ -216,21 +221,21 @@ export const GROK_CALLER_PATTERN = [
 ];
 
 export const CLAUDE_CALLER_PATTERN = [
-  "grok",
+  GROK_OPENROUTER_SLUG,
   GEMINI_PRO_SLUG,
   GPT_SLUG,
   OPENROUTER_AUTO_SLUG,
 ];
 
 export const OPENAI_CALLER_PATTERN = [
-  "grok",
+  GROK_OPENROUTER_SLUG,
   CLAUDE_SONNET_OPENROUTER_SLUG,
   GEMINI_PRO_SLUG,
   OPENROUTER_AUTO_SLUG,
 ];
 
 export const GOOGLE_CALLER_PATTERN = [
-  "grok",
+  GROK_OPENROUTER_SLUG,
   CLAUDE_SONNET_OPENROUTER_SLUG,
   GPT_SLUG,
   OPENROUTER_AUTO_SLUG,
@@ -294,10 +299,6 @@ function noGrokCallerPool(existing: Seat[]): string[] {
 /** @deprecated alias — same as defaultCallerPool. */
 const grokCallerPool = defaultCallerPool;
 
-// A grok slug in the reasoning pool (the literal "grok" diversity seat) → a
-// grok-DIRECT reasoning seat (grounding off), per §0. auto-beta may itself
-// surface Grok via OR — that stays an OR seat (low-stakes wildcard). So "grok"/
-// "x-ai/grok-*" are direct here.
 function isAutoSlug(slug: string): boolean {
   return slug === OPENROUTER_AUTO_SLUG || slug === "openrouter/auto";
 }
@@ -305,9 +306,20 @@ function isGrokSlug(slug: string): boolean {
   return !isAutoSlug(slug) && /grok/i.test(slug);
 }
 
+function normalizeGrokOrSlug(slug: string): string {
+  if (slug === "grok") return GROK_OPENROUTER_SLUG;
+  return slug.includes("/") ? slug : `x-ai/${slug}`;
+}
+
 function reasoningSeat(slug: string, idx: number, lens: string, effort: Effort, autoOrdinal = 0): Seat {
   if (isGrokSlug(slug)) {
-    return { id: `reason-${idx}`, provider: "grok-direct", model_slug: slug, lens, reasoning_effort: effort };
+    return {
+      id: `reason-${idx}`,
+      provider: "openrouter",
+      model_slug: normalizeGrokOrSlug(slug),
+      lens,
+      reasoning_effort: effort,
+    };
   }
   // The 4-cycle seats auto again at seat 8, 12, …. The first keeps the id
   // "auto" (n=1 and the 4th seat). Later copies get auto-2, auto-3, so
@@ -337,12 +349,23 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   const effortFor = (_slug: string): Effort => baseEffort;
   const seats: Seat[] = [];
 
-  // capability seats — native tools, never routed through `auto`
+  // capability seats — native tools, never routed through `auto`.
+  // grok_x_search / force_x is soft-deprecated (Grok routes via OR without
+  // native X search): warn + fall back to grounded Gemini web search.
   if (c.needs_x || ov.force_x) {
-    seats.push({ id: "grok-x", provider: "grok-direct", model_slug: "grok", lens, reasoning_effort: effortFor("grok"), grok_grounding: "required" });
+    console.error(
+      "[ask_oracle] DEPRECATED: grok_x_search / force_x is soft-deprecated; routing to grounded Gemini web search instead.",
+    );
   }
-  if (c.needs_grounding || ov.force_grounding) {
-    seats.push({ id: "gemini-grounded", provider: "openrouter", model_slug: GEMINI_PRO_SLUG, lens, reasoning_effort: effortFor(GEMINI_PRO_SLUG), grounded: true });
+  if (c.needs_grounding || ov.force_grounding || c.needs_x || ov.force_x) {
+    seats.push({
+      id: "gemini-grounded",
+      provider: "openrouter",
+      model_slug: GEMINI_PRO_SLUG,
+      lens,
+      reasoning_effort: effortFor(GEMINI_PRO_SLUG),
+      grounded: true,
+    });
   }
   // Fusion engine: one OR Fusion seat replaces the reasoning pool (§6a). Capability
   // seats above are kept; panel_size / exclude_family are ignored on this path.
@@ -404,7 +427,12 @@ function resolvedModelId(s: Seat): string {
 
 function tagsFor(s: Seat): string[] {
   if (s.model_slug === FUSION_MODEL_SLUG) return ["fusion"];
-  const head = s.provider === "grok-direct" ? "grok" : /gemini/i.test(s.model_slug) ? "gemini" : s.model_slug;
+  const head =
+    s.provider === "grok-direct" || isGrokSlug(s.model_slug)
+      ? "grok"
+      : /gemini/i.test(s.model_slug)
+        ? "gemini"
+        : s.model_slug;
   const tags = [head];
   if (s.grok_grounding) tags.push("x_search");
   if (s.grounded) tags.push("grounded");
@@ -622,6 +650,7 @@ async function orReasoningWithFailover(
       });
       return { text: r.text, citations: r.citations, transport: "direct", failover_fired: true };
     }
+    if (!deps.xaiApiKey) throw e;
     console.error(`[ask_oracle] OR transient fail on ${slug} — failover → grok-direct: ${(e as Error).message}`);
     const r = await callGrok(
       deps.xaiApiKey,
@@ -928,7 +957,7 @@ export async function assemble(
     );
     if (orishFailed && grokRecovered && lookedLikeOrHang) {
       resp.recovery_note =
-        "OpenRouter stalled (seat timeout/abort); Grok-direct recovered. " +
+        "OpenRouter stalled on sibling seats (seat timeout/abort); Grok recovered. " +
         "Partial panel — trust Grok + any other ok seats; failed OR seats are not model 'down'.";
     } else if (orishFailed && oks.length > 0 && lookedLikeOrHang) {
       resp.recovery_note =

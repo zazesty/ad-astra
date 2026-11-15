@@ -11,6 +11,12 @@
  * cases are rejected by zod before any call to xAI.
  */
 import { extractAnswerAndCitations, applyGroundingContract } from "../build/grokCore.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { registerAskPanel } from "../build/panel.js";
+import { CLI_BUDGET } from "../build/budgetProfile.js";
+import { GROK_OPENROUTER_SLUG } from "../build/modelPins.js";
 
 const MCP_URL = process.env.MCP_URL ?? "http://127.0.0.1:3000/mcp";
 let pass = 0;
@@ -86,6 +92,69 @@ console.log("Unit: applyGroundingContract");
 {
   const r = applyGroundingContract({ text: "Model chose not to search.", citations: [] }, "auto");
   check("auto + empty => passthrough (no throw)", r.text === "Model chose not to search.");
+}
+
+// --- Unit: ask_panel Grok via OpenRouter + deprecated grounded:true (mocked fetch) ---
+console.log("\nUnit: ask_panel Grok OpenRouter routing & soft-deprecated X search");
+{
+  const realFetch = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : null });
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { content: "Grok OR answer." } }],
+        service_tier: "default",
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = new McpServer({ name: "grok-or-test", version: "1.0.0" });
+  registerAskPanel(server, {
+    xaiApiKey: undefined,
+    geminiApiKey: undefined,
+    openrouterApiKey: "test-or-key",
+    geminiTransport: "openrouter",
+    budget: CLI_BUDGET,
+  });
+  const client = new Client({ name: "grok-or-test-client", version: "1.0.0" });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  try {
+    const okRes = await client.callTool({
+      name: "ask_panel",
+      arguments: {
+        prompt: "Test prompt",
+        specs: [{ model: "grok", lens: "none" }],
+      },
+    });
+    const parsedOk = JSON.parse(okRes.content[0].text);
+    check("ask_panel model:'grok' returns ok:true", Array.isArray(parsedOk) && parsedOk[0]?.ok === true);
+    check("ask_panel model:'grok' reports transport:'or'", parsedOk[0]?.transport === "or");
+    check("ask_panel model:'grok' hits OpenRouter chat/completions", seen.length === 1 && seen[0].url.includes("openrouter.ai/api/v1/chat/completions"));
+    check("ask_panel model:'grok' sends GROK_OPENROUTER_SLUG", seen[0]?.body?.model === GROK_OPENROUTER_SLUG);
+    check("ask_panel model:'grok' sends medium reasoning effort", seen[0]?.body?.reasoning?.effort === "medium");
+
+    const depRes = await client.callTool({
+      name: "ask_panel",
+      arguments: {
+        prompt: "What is happening on X?",
+        specs: [{ model: "grok", grounded: true, lens: "none" }],
+      },
+    });
+    const parsedDep = JSON.parse(depRes.content[0].text);
+    check("ask_panel model:'grok' grounded:true fails cleanly", Array.isArray(parsedDep) && parsedDep[0]?.ok === false);
+    check(
+      "ask_panel model:'grok' grounded:true returns deprecation message",
+      typeof parsedDep[0]?.error === "string" && /deprecated/i.test(parsedDep[0].error) && /argon/i.test(parsedDep[0].error),
+    );
+    check("ask_panel model:'grok' grounded:true makes no fetch call", seen.length === 1);
+  } finally {
+    await client.close();
+    await server.close();
+    globalThis.fetch = realFetch;
+  }
 }
 
 // --- Integration: live MCP zod validation (free; rejected pre-fetch) ---

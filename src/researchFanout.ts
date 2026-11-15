@@ -78,8 +78,9 @@ type RegisterOpts = {
 
 export function coerceMode(raw: unknown): LegMode {
   const s = String(raw || "").toLowerCase();
-  if (s === "grok_x" || s === "x" || s === "x_search") return "grok_x";
-  if (s === "grok_grounded" || s === "grok") return "grok_grounded";
+  if (s === "grok_x" || s === "x" || s === "x_search" || s === "grok_grounded" || s === "grok") {
+    console.error(`[research_fanout] DEPRECATED leg mode '${s}' requested; routing to gemini_grounded.`);
+  }
   return "gemini_grounded";
 }
 
@@ -118,12 +119,10 @@ async function mapLimitSettled<T, R>(
 }
 
 const DECOMPOSE_SYSTEM = `You decompose a research question into independent evidence-seeking sub-queries.
-Return ONLY JSON: {"legs":[{"query":"...","mode":"gemini_grounded|grok_x|grok_grounded","rationale":"..."}]}
+Return ONLY JSON: {"legs":[{"query":"...","mode":"gemini_grounded","rationale":"..."}]}
 Rules:
 - 1 to N legs (N given by user). Prefer factual, sourceable sub-questions.
-- mode gemini_grounded = general web/current facts (default).
-- mode grok_x = live X / social / "what is being said on X".
-- mode grok_grounded = Grok retrieval with web/x when non-Gemini retrieval helps.
+- mode gemini_grounded = web/current facts (live X / grok_x modes are deprecated).
 - No meta/opinion-only legs. No nested research instructions.
 - Keep each query self-contained.`;
 
@@ -174,16 +173,13 @@ async function decompose(
   }
 }
 
-export function ensureForceX(plans: LegPlan[], force: boolean, maxLegs: number): LegPlan[] {
-  if (!force) return plans;
-  if (plans.some((p) => p.mode === "grok_x")) return plans;
-  const next = plans.slice(0, Math.max(0, maxLegs - 1));
-  next.push({
-    query: plans[0]?.query || "What is being said on X about this topic right now?",
-    mode: "grok_x",
-    rationale: "force_x_leg",
-  });
-  return next.slice(0, maxLegs);
+export function ensureForceX(plans: LegPlan[], force: boolean, _maxLegs: number): LegPlan[] {
+  if (force) {
+    console.error(
+      "[research_fanout] DEPRECATED: force_x_leg / grok_x_search is soft-deprecated; using grounded Gemini web legs instead.",
+    );
+  }
+  return plans;
 }
 
 /**
@@ -283,10 +279,14 @@ async function runLeg(
   qHash: string,
 ): Promise<LegResult> {
   const t0 = Date.now();
+  const effectiveMode: LegMode = plan.mode === "gemini_grounded" || !opts.xaiApiKey ? "gemini_grounded" : plan.mode;
+  if (plan.mode !== "gemini_grounded" && effectiveMode === "gemini_grounded") {
+    console.error(`[research_fanout] ${id} mode ${plan.mode} fell back to gemini_grounded (grok_x_search deprecated / no XAI_API_KEY)`);
+  }
   const base: LegResult = {
     id,
     query: plan.query,
-    mode: plan.mode,
+    mode: effectiveMode,
     status: "error",
     citations: [],
     latency_ms: 0,
@@ -302,8 +302,9 @@ async function runLeg(
 
   const record = (leg: LegResult) => {
     const ok = leg.status === "ok";
+    const isGrokLeg = effectiveMode.startsWith("grok");
     const legModelSlug =
-      plan.mode.startsWith("grok")
+      isGrokLeg
         ? "grok"
         : (leg.transport === "direct" || (leg.transport == null && opts.geminiTransport === "direct"))
           ? GEMINI_HYDROGEN_DIRECT
@@ -311,14 +312,14 @@ async function runLeg(
     void recordSeatMetric({
       ts: new Date().toISOString(),
       tool: "research_fanout",
-      route_mode: plan.mode,
+      route_mode: effectiveMode,
       seat_id: id,
-      family: plan.mode.startsWith("grok") ? "grok" : "gemini",
+      family: isGrokLeg ? "grok" : "gemini",
       model_slug: legModelSlug,
-      transport: leg.transport ?? (plan.mode.startsWith("grok") ? "direct" : "or"),
+      transport: leg.transport ?? (isGrokLeg ? "direct" : "or"),
       grounded_requested: true,
       grounding_fired: ok && (leg.citations?.length ?? 0) > 0,
-      x_search_fired: ok && plan.mode === "grok_x" && (leg.citations?.length ?? 0) > 0,
+      x_search_fired: ok && effectiveMode === "grok_x" && (leg.citations?.length ?? 0) > 0,
       reasoning_effort: loggedReasoningEffort(
         legModelSlug,
         effort,
@@ -337,7 +338,7 @@ async function runLeg(
   try {
     const result = await withTimeout(
       (async (): Promise<LegResult> => {
-        if (plan.mode === "gemini_grounded") {
+        if (effectiveMode === "gemini_grounded") {
           const geminiOpts = {
             grounded: true as const,
             reasoning_effort: effort,
@@ -413,7 +414,7 @@ async function runLeg(
       error: msg,
       citations: [],
       latency_ms: Date.now() - t0,
-      transport: plan.mode.startsWith("grok") ? "direct" : opts.geminiTransport === "openrouter" ? "or" : "direct",
+      transport: effectiveMode.startsWith("grok") ? "direct" : opts.geminiTransport === "openrouter" ? "or" : "direct",
     };
     record(leg);
     return leg;
@@ -481,15 +482,15 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
         "Parallel grounded EVIDENCE for a scoped, multi-hop factual/regional/technical question, e.g. industry + " +
           "labor + technology + supply chain in a region. Fans out fixed independent sub-questions; use native deep " +
           "research when you need to steer an evolving iterative loop. This is not an opinion panel or live-news wire. " +
-          "Strategy/opinion/tradeoffs → ask_panel with specs omitted. Pure breaking-X sentiment → ask_panel " +
-          "model:'grok', grounded:true; fanout X legs can time out under load. Re-scope vague prompts first. Trivial " +
-          "textbook constants may fail with grounding_miss, degraded:true and no answer. Flow: decompose up to max_legs " +
-          "(fewer when sufficient), run independent parallel web-grounded Gemini 4 Hydrogen legs plus optional " +
-          "grok_x/grok_grounded legs, then merge with citation union; no nested tools. synthesize:false returns raw " +
-          "legs. Independent failures yield partial results and degraded/slots_status. Inspect route.elapsed_ms, " +
-          "legs[].status, citations[] and degraded. Healthy complex runs often take 30–45s; outer budgets are " +
-          "client-dependent (~50s chat, ~55s Claude, ~85s Grok Build). Multiple legs mean multiple model calls/cost. " +
-          "lens/system affect synthesis only, never routing.",
+          "Strategy/opinion/tradeoffs → ask_panel with specs omitted. Live X search (grok_x_search) is deprecated; " +
+          "use web-grounded search (model:'argon', grounded:true or research_fanout) instead. Re-scope vague prompts " +
+          "first. Trivial textbook constants may fail with grounding_miss, degraded:true and no answer. Flow: " +
+          "decompose up to max_legs (fewer when sufficient), run independent parallel web-grounded Gemini 4 Hydrogen " +
+          "legs, then merge with citation union; no nested tools. synthesize:false returns raw legs. Independent " +
+          "failures yield partial results and degraded/slots_status. Inspect route.elapsed_ms, legs[].status, " +
+          "citations[] and degraded. Healthy complex runs often take 30–45s; outer budgets are client-dependent " +
+          "(~50s chat, ~55s Claude, ~85s Grok Build). Multiple legs mean multiple model calls/cost. lens/system " +
+          "affect synthesis only, never routing.",
       inputSchema: {
         prompt: z
           .string()
@@ -531,8 +532,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           .boolean()
           .optional()
           .describe(
-            "Ensure at least one live-X grok_x leg when research needs web + X. For pure breaking-X reaction, use " +
-          "ask_panel model:'grok', grounded:true instead; hot-topic X legs can increase fanout timeout risk.",
+            "Deprecated (no-op; grok_x_search is soft-deprecated — fanout runs web-grounded Gemini legs instead).",
           ),
       },
       annotations: {
