@@ -57,7 +57,7 @@ try {
   check("author forwarded and stored", item.author === AUTHOR);
   check("author returned", added.author === AUTHOR);
   check("owner agent", item.owner === "agent");
-  check("priority 3", item.priority === 3);
+  check("priority 2", item.priority === 2);
   check("next stored", item.next_action === "Grok Build: look at the widget");
   check("id returned", added.id === item.id);
 

@@ -71,8 +71,8 @@ const authorSchema = z
   .refine((s) => !/[\r\n]/.test(s), "author must be one line");
 
 export type AddResult =
-  | { ok: true; id: string; duplicate: false; open: number; owner: "agent"; priority: 3; author: string }
-  | { ok: true; id: string; duplicate: true; open: number; owner: "agent"; priority: 3; author: string | null }
+  | { ok: true; id: string; duplicate: false; open: number; owner: "agent"; priority: 2; author: string }
+  | { ok: true; id: string; duplicate: true; open: number; owner: "agent"; priority: 2; author: string | null }
   | { ok: false; error: "open_cap"; open: number; cap: number };
 
 export async function addStandingTodo(input: {
@@ -107,7 +107,7 @@ export async function addStandingTodo(input: {
       duplicate: true,
       open: openItems.length,
       owner: "agent",
-      priority: 3,
+      priority: 2,
       author: existing.author ?? null,
     };
   }
@@ -115,7 +115,7 @@ export async function addStandingTodo(input: {
     return { ok: false, error: "open_cap", open: openItems.length, cap };
   }
 
-  const args = ["add", title, "--author", author, "--owner", "agent", "--priority", "3"];
+  const args = ["add", title, "--author", author, "--owner", "agent", "--priority", "2"];
   if (next) args.push("--next", next);
 
   let stdout: string;
@@ -135,7 +135,7 @@ export async function addStandingTodo(input: {
   if (!id) throw new Error("standing-todos.sh returned no id");
 
   const open = readOpenItems(todosPath).length;
-  return { ok: true, id, duplicate: false, open, owner: "agent", priority: 3, author };
+  return { ok: true, id, duplicate: false, open, owner: "agent", priority: 2, author };
 }
 
 export function registerStandingTodoAdd(server: any) {
@@ -146,7 +146,7 @@ export function registerStandingTodoAdd(server: any) {
       description:
         "Add one piece of open work to the board Grok Build ships from. Sign title as \"[Your name / agent] Work " +
           "title\"; the signature is stored separately as author. Use this for todos, reminders and parking slips; never " +
-          "use memory_* or the KB. Owner is always agent and priority 3. Returns an existing open same-title item as a " +
+          "use memory_* or the KB. Owner is always agent and priority 2. Returns an existing open same-title item as a " +
           "duplicate; refuses new items at " + OPEN_ITEM_CAP +
           " open. Add-only: cannot list, complete, note or delete.",
       inputSchema: {
