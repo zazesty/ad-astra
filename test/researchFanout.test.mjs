@@ -11,7 +11,7 @@ import {
   summarizeLegs,
 } from "../build/researchFanout.js";
 import { withTimeout, remainingMs, seatBudgetMs } from "../build/timeouts.js";
-import { GEMINI_FLASH_OR, GEMINI_FLASH_DIRECT } from "../build/modelPins.js";
+import { GEMINI_HYDROGEN_OR, GEMINI_HYDROGEN_DIRECT } from "../build/modelPins.js";
 
 let pass = 0;
 let fail = 0;
@@ -38,8 +38,8 @@ const plans = ensureForceX([{ query: "q", mode: "gemini_grounded" }], true, 4);
 check("ensureForceX adds grok_x", plans.some((p) => p.mode === "grok_x"));
 check("ensureForceX respects max", ensureForceX([{ query: "q", mode: "gemini_grounded" }], true, 1).length === 1);
 check("MAX_LEGS_HARD is 5", MAX_LEGS_HARD === 5);
-check("GEMINI_FLASH_OR is google/gemini-3.8-flash", GEMINI_FLASH_OR === "google/gemini-3.8-flash");
-check("GEMINI_FLASH_DIRECT is gemini-3.8-flash", GEMINI_FLASH_DIRECT === "gemini-3.8-flash");
+check("GEMINI_HYDROGEN_OR is google/gemini-4-hydrogen", GEMINI_HYDROGEN_OR === "google/gemini-4-hydrogen");
+check("GEMINI_HYDROGEN_DIRECT is gemini-4-hydrogen", GEMINI_HYDROGEN_DIRECT === "gemini-4-hydrogen");
 
 const phases = fanoutPhaseSeatRecords({
   ts: "2026-11-06T00:00:00.000Z",

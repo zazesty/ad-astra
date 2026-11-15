@@ -35,15 +35,15 @@ export const DEFAULT_GEMINI_MODEL = "gemini-4-argon";
 export const DEFAULT_OPENROUTER_GEMINI_MODEL = "google/gemini-4-argon";
 
 /**
- * Gemini 3 Flash, Pro, and Gemini 4 Argon accept thinking levels. Flash-Lite
- * stays on its own minimal default (the classifier). Gemini 2.5 Flash 400s
- * on thinkingLevel.
+ * Gemini 3 Flash, Pro, Gemini 4 Hydrogen, and Gemini 4 Argon accept thinking
+ * levels. Flash-Lite stays on its own minimal default (the classifier).
+ * Gemini 2.5 Flash 400s on thinkingLevel.
  */
 export function geminiHonorsThinking(model: string): boolean {
   if (!/gemini/i.test(model)) return false;
   if (/lite/i.test(model)) return false;
   if (/2\.5/.test(model)) return false;
-  return /flash/i.test(model) || /argon/i.test(model) || /pro-latest/i.test(model) || /-pro\b/i.test(model);
+  return /flash/i.test(model) || /hydrogen/i.test(model) || /argon/i.test(model) || /pro-latest/i.test(model) || /-pro\b/i.test(model);
 }
 
 /**
@@ -71,14 +71,14 @@ export function wireReasoningEffort(
 }
 
 /**
- * Google priority is a Tier 2/3 reservation. This project is Tier 1, and Flash
- * and Flash-Lite are shed to standard (2026-11-05). Stop asking on any slug
- * whose name contains "flash" (Flash and Flash-Lite, including floating
+ * Google priority is a Tier 2/3 reservation. This project is Tier 1, and Flash,
+ * Hydrogen, and Flash-Lite are shed to standard (2026-11-05). Stop asking on
+ * any slug whose name contains "flash" or "hydrogen" (including floating
  * aliases). Argon and other Gemini models still ask. Sol fast is separate.
  */
 export function geminiRequestsPriority(model: string): boolean {
   if (!/gemini/i.test(model)) return false;
-  if (/flash/i.test(model)) return false;
+  if (/flash/i.test(model) || /hydrogen/i.test(model)) return false;
   return true;
 }
 

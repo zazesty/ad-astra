@@ -21,8 +21,8 @@ import {
   CLASSIFIER_FALLBACK_MODELS,
 } from "./oracleClassifier.js";
 import {
-  GEMINI_FLASH_OR,
-  GEMINI_FLASH_DIRECT,
+  GEMINI_HYDROGEN_OR,
+  GEMINI_HYDROGEN_DIRECT,
 } from "./modelPins.js";
 import {
   classifyError,
@@ -306,8 +306,8 @@ async function runLeg(
       plan.mode.startsWith("grok")
         ? "grok"
         : (leg.transport === "direct" || (leg.transport == null && opts.geminiTransport === "direct"))
-          ? GEMINI_FLASH_DIRECT
-          : GEMINI_FLASH_OR;
+          ? GEMINI_HYDROGEN_DIRECT
+          : GEMINI_HYDROGEN_OR;
     void recordSeatMetric({
       ts: new Date().toISOString(),
       tool: "research_fanout",
@@ -321,7 +321,7 @@ async function runLeg(
       x_search_fired: ok && plan.mode === "grok_x" && (leg.citations?.length ?? 0) > 0,
       reasoning_effort: loggedReasoningEffort(
         legModelSlug,
-        plan.mode === "gemini_grounded" ? null : effort,
+        effort,
       ),
       latency_ms: leg.latency_ms,
       failover_fired: false,
@@ -340,7 +340,7 @@ async function runLeg(
         if (plan.mode === "gemini_grounded") {
           const geminiOpts = {
             grounded: true as const,
-            reasoning_effort: null,
+            reasoning_effort: effort,
             attempt_timeout_ms:
               opts.geminiTransport === "openrouter"
                 ? Math.max(5_000, budgetMs - 500)
@@ -348,13 +348,13 @@ async function runLeg(
           };
           const callOnce = () =>
             opts.geminiTransport === "openrouter"
-              ? callOpenRouter(opts.openrouterApiKey, GEMINI_FLASH_OR, plan.query, {
+              ? callOpenRouter(opts.openrouterApiKey, GEMINI_HYDROGEN_OR, plan.query, {
                   ...geminiOpts,
                   grounded: true,
                 })
               : callGemini(geminiClient, plan.query, {
                   ...geminiOpts,
-                  model: GEMINI_FLASH_DIRECT,
+                  model: GEMINI_HYDROGEN_DIRECT,
                 });
 
           let r = await callOnce();
@@ -484,7 +484,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           "Strategy/opinion/tradeoffs → ask_panel with specs omitted. Pure breaking-X sentiment → ask_panel " +
           "model:'grok', grounded:true; fanout X legs can time out under load. Re-scope vague prompts first. Trivial " +
           "textbook constants may fail with grounding_miss, degraded:true and no answer. Flow: decompose up to max_legs " +
-          "(fewer when sufficient), run independent parallel web-grounded Gemini 3.8 Flash legs plus optional " +
+          "(fewer when sufficient), run independent parallel web-grounded Gemini 4 Hydrogen legs plus optional " +
           "grok_x/grok_grounded legs, then merge with citation union; no nested tools. synthesize:false returns raw " +
           "legs. Independent failures yield partial results and degraded/slots_status. Inspect route.elapsed_ms, " +
           "legs[].status, citations[] and degraded. Healthy complex runs often take 30–45s; outer budgets are " +
