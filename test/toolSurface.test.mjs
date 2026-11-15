@@ -66,7 +66,7 @@ check(
   `no extra tools (extra=${extra.join(",") || "none"})`,
   extra.length === 0,
 );
-check("count is at least 10 (current ship)", MCP_TOOL_COUNT >= 10);
+check("count is at least 11 (current ship)", MCP_TOOL_COUNT >= 11);
 
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 const server = buildServer();
@@ -126,6 +126,11 @@ try {
     "memory_upsert stays non-read-only & destructiveHint=true",
     byName.memory_upsert?.annotations?.readOnlyHint === false &&
       byName.memory_upsert?.annotations?.destructiveHint === true,
+  );
+  check(
+    "personal_memory_sync stays non-read-only & destructiveHint=true",
+    byName.personal_memory_sync?.annotations?.readOnlyHint === false &&
+      byName.personal_memory_sync?.annotations?.destructiveHint === true,
   );
 } finally {
   await client.close();

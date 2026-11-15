@@ -14,6 +14,7 @@ import { loadLensesRaw } from "./lenses.js";
 import { registerGetMetrics } from "./metrics.js";
 import { registerResearchFanout } from "./researchFanout.js";
 import { registerStandingTodoAdd } from "./standingTodo.js";
+import { registerPersonalMemorySync } from "./personalMemorySync.js";
 import {
   budgetProfileFromUserAgent,
   shortUserAgent,
@@ -123,6 +124,7 @@ export function buildServer(
   registerMemoryTools(server);
   registerGetMetrics(server);
   registerStandingTodoAdd(server);
+  registerPersonalMemorySync(server);
   registerResearchFanout(server, {
     xaiApiKey: XAI_API_KEY,
     geminiApiKey: GEMINI_API_KEY,

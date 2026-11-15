@@ -142,7 +142,7 @@ function parseFrontmatter(raw: string): { data: Record<string, any>; body: strin
   return { data, body, originalFront: `---\n${front}\n---\n` };
 }
 
-async function readFact(filePath: string): Promise<MemoryFact | null> {
+export async function readFact(filePath: string): Promise<MemoryFact | null> {
   try {
     const raw = await readFile(filePath, "utf8");
     const { data, body } = parseFrontmatter(raw);
@@ -503,7 +503,7 @@ function buildFrontmatter(fact: MemoryFact): string {
   return lines.join("\n") + "\n";
 }
 
-async function upsertFact(dir: string, input: {
+export async function upsertFact(dir: string, input: {
   id?: string;
   name: string;
   description?: string;
