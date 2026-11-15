@@ -1,10 +1,14 @@
 /**
- * Guard: MCP_TOOLS in toolSurface.ts must match every registerTool("name") in src/.
+ * Guard: MCP_TOOLS and TOOL_ANNOTATIONS in toolSurface.ts must match every
+ * registerTool("name") in src/ and the live McpServer tools/list output.
  *   node test/toolSurface.test.mjs   (after npm run build)
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { MCP_TOOLS, MCP_TOOL_COUNT } from "../build/toolSurface.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { MCP_TOOLS, MCP_TOOL_COUNT, TOOL_ANNOTATIONS } from "../build/toolSurface.js";
+import { buildServer } from "../build/index.js";
 
 let pass = 0;
 let fail = 0;
@@ -63,6 +67,70 @@ check(
   extra.length === 0,
 );
 check("count is at least 10 (current ship)", MCP_TOOL_COUNT >= 10);
+
+const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+const server = buildServer();
+const client = new Client({ name: "tool-surface-test", version: "1.0.0" });
+await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+try {
+  const { tools } = await client.listTools();
+  const listedNames = tools.map((t) => t.name).sort();
+  check("tools/list count matches MCP_TOOL_COUNT", tools.length === MCP_TOOL_COUNT);
+  check("tools/list names match MCP_TOOLS", JSON.stringify(listedNames) === JSON.stringify(expected));
+
+  const expectedReadOnly = [
+    "ask_panel",
+    "get_metrics",
+    "get_odds",
+    "memory_list",
+    "memory_retrieve",
+    "memory_search",
+    "research_fanout",
+  ].sort();
+
+  const actualReadOnly = [];
+  for (const tool of tools) {
+    const ann = tool.annotations;
+    const spec = TOOL_ANNOTATIONS[tool.name];
+    check(`${tool.name}: has TOOL_ANNOTATIONS entry`, Boolean(spec));
+    check(
+      `${tool.name}: explicit boolean readOnlyHint & destructiveHint`,
+      typeof ann?.readOnlyHint === "boolean" && typeof ann?.destructiveHint === "boolean",
+    );
+    if (spec && ann) {
+      check(
+        `${tool.name}: readOnlyHint=${spec.readOnlyHint}, destructiveHint=${spec.destructiveHint}`,
+        ann.readOnlyHint === spec.readOnlyHint && ann.destructiveHint === spec.destructiveHint,
+      );
+    }
+    if (ann?.readOnlyHint === true) actualReadOnly.push(tool.name);
+  }
+  actualReadOnly.sort();
+  check(
+    "read-only set matches expected tools",
+    JSON.stringify(actualReadOnly) === JSON.stringify(expectedReadOnly),
+  );
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  check(
+    "get_news_digest stays non-read-only & non-destructive (default email=true)",
+    byName.get_news_digest?.annotations?.readOnlyHint === false &&
+      byName.get_news_digest?.annotations?.destructiveHint === false,
+  );
+  check(
+    "standing_todo_add stays non-read-only & non-destructive",
+    byName.standing_todo_add?.annotations?.readOnlyHint === false &&
+      byName.standing_todo_add?.annotations?.destructiveHint === false,
+  );
+  check(
+    "memory_upsert stays non-read-only & destructiveHint=true",
+    byName.memory_upsert?.annotations?.readOnlyHint === false &&
+      byName.memory_upsert?.annotations?.destructiveHint === true,
+  );
+} finally {
+  await client.close();
+  await server.close();
+}
 
 console.log(`\n  surface: ${MCP_TOOL_COUNT} tools — ${MCP_TOOLS.join(", ")}`);
 console.log(`\n${pass} passed, ${fail} failed`);

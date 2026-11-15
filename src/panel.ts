@@ -258,6 +258,10 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           .describe("Fusion tier; default general-budget. Ignored unless engine is fusion. general-fast is a latency preset, not " +
           "Sol service tier."),
       },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+      },
     },
     async (args: {
       prompt: string;

@@ -535,6 +535,10 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           "ask_panel model:'grok', grounded:true instead; hot-topic X legs can increase fanout timeout risk.",
           ),
       },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+      },
     },
     async (args: {
       prompt: string;

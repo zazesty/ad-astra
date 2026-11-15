@@ -155,6 +155,10 @@ export function registerStandingTodoAdd(server: any) {
           .optional()
           .describe("Optional one-line next step. Omit when the title is enough."),
       },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+      },
     },
     async (args: { title: string; next?: string }) => {
       try {

@@ -638,6 +638,10 @@ export function registerMemoryTools(server: any) {
           .optional()
           .describe("If true, include superseded/archived facts (default false — active only)."),
       },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+      },
     },
     async ({ query, tags, limit, expand_related, include_archived }: { query?: string; tags?: string[]; limit?: number; expand_related?: boolean; include_archived?: boolean }) => {
       try {
@@ -661,6 +665,10 @@ export function registerMemoryTools(server: any) {
           .string()
           .min(1)
           .describe("Fact id (e.g. 'grok-mcp-setup' or 'astra-mcp-path-is-a-secret')."),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
       },
     },
     async ({ id }: { id: string }) => {
@@ -707,6 +715,10 @@ export function registerMemoryTools(server: any) {
           .string()
           .optional()
           .describe("When superseding, id of the replacement fact."),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
       },
     },
     async (input: { id?: string; name: string; description?: string; content: string; tags?: string[]; related?: string[]; status?: FactStatus; superseded_by?: string }) => {
@@ -766,6 +778,10 @@ export function registerMemoryTools(server: any) {
           .boolean()
           .optional()
           .describe("If true, include superseded/archived facts (default false)."),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
       },
     },
     async ({ tags, limit, include_archived }: { tags?: string[]; limit?: number; include_archived?: boolean }) => {

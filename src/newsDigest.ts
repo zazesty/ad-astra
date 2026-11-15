@@ -524,6 +524,10 @@ export function registerNewsDigest(server: any, deps: SummarizeDeps & { z: typeo
         max_items: z.number().int().min(1).max(60).optional().describe("Summarizer item budget (default 24); capped AI/industry sections are kept whole, and uncapped sections share " +
           "the remainder."),
       },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+      },
     },
     async ({ days, sections, email, max_items }: { days?: number; sections?: string[]; email?: boolean; max_items?: number }) => {
       try {

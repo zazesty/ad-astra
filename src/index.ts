@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -43,7 +44,10 @@ function loadAstraIcon(): { png: Buffer; dataUri: string } | null {
 
 const ASTRA_ICON = loadAstraIcon();
 
-function buildServer(budget: BudgetProfile, callerFamily?: CallerFamily) {
+export function buildServer(
+  budget: BudgetProfile = budgetProfileFromUserAgent(undefined),
+  callerFamily?: CallerFamily,
+) {
   const server = new McpServer({
     name: "grok-mcp-remote",
     title: "Astra",
@@ -77,6 +81,10 @@ function buildServer(budget: BudgetProfile, callerFamily?: CallerFamily) {
           .array(z.enum(ODDS_SOURCES as unknown as [string, ...string[]]))
           .optional()
           .describe("Venues to query. Default ['polymarket','kalshi']. Opt in with a full list, e.g. ['polymarket','kalshi','manifold'] or ['predictit']."),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
       },
     },
     async ({ query, limit, sources }) => {
@@ -221,4 +229,9 @@ app.post(MCP_PATHS, async (req, res) => {
 app.get(MCP_PATHS, (_req, res) => res.status(405).send("Method Not Allowed"));
 app.delete(MCP_PATHS, (_req, res) => res.status(405).send("Method Not Allowed"));
 
-app.listen(PORT, "127.0.0.1", () => console.log(`grok-mcp listening on 127.0.0.1:${PORT} (${MCP_PATHS.length} mount(s))`));
+const isMain =
+  typeof process.argv[1] === "string" &&
+  import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+if (isMain) {
+  app.listen(PORT, "127.0.0.1", () => console.log(`grok-mcp listening on 127.0.0.1:${PORT} (${MCP_PATHS.length} mount(s))`));
+}

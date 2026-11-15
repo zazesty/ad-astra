@@ -22,3 +22,26 @@ export const MCP_TOOLS = [
 export type McpToolName = (typeof MCP_TOOLS)[number];
 
 export const MCP_TOOL_COUNT: number = MCP_TOOLS.length;
+
+export type ExpectedToolAnnotations = {
+  readOnlyHint: boolean;
+  destructiveHint: boolean;
+};
+
+/**
+ * Expected MCP tool annotations for every tool on the surface.
+ * Note: MCP annotations are static per tool; get_news_digest defaults to
+ * email=true and updates state, so it stays readOnlyHint: false.
+ */
+export const TOOL_ANNOTATIONS: Record<McpToolName, ExpectedToolAnnotations> = {
+  get_odds: { readOnlyHint: true, destructiveHint: false },
+  ask_panel: { readOnlyHint: true, destructiveHint: false },
+  get_news_digest: { readOnlyHint: false, destructiveHint: false },
+  memory_search: { readOnlyHint: true, destructiveHint: false },
+  memory_retrieve: { readOnlyHint: true, destructiveHint: false },
+  memory_upsert: { readOnlyHint: false, destructiveHint: true },
+  memory_list: { readOnlyHint: true, destructiveHint: false },
+  get_metrics: { readOnlyHint: true, destructiveHint: false },
+  research_fanout: { readOnlyHint: true, destructiveHint: false },
+  standing_todo_add: { readOnlyHint: false, destructiveHint: false },
+};

@@ -396,6 +396,10 @@ export function registerGetMetrics(server: any) {
           .optional()
           .describe("Filter seat logs: oracle, panel, or research_fanout."),
       },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+      },
     },
     async (args: {
       window_days?: number;
