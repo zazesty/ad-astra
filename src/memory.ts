@@ -325,10 +325,6 @@ export async function embedQueryWithBudget(
   }
 }
 
-function matchesQuery(fact: MemoryFact, query: string): boolean {
-  return keywordScore(fact, query) > 0;
-}
-
 function hasAllTags(fact: MemoryFact, tags: string[]): boolean {
   if (!tags || tags.length === 0) return true;
   const set = new Set(fact.tags.map(t => t.toLowerCase()));
@@ -516,11 +512,7 @@ export async function upsertFact(dir: string, input: {
   const id = (input.id || input.name).replace(/\.md$/, "");
   const filePath = join(dir, `${id}.md`);
 
-  let existing: MemoryFact | null = null;
-  try {
-    const raw = await readFile(filePath, "utf8");
-    existing = await readFact(filePath);
-  } catch {}
+  const existing = await readFact(filePath);
 
   // Auto-harvest [[slug]] from content into related (clarified: scans body for [[id]] patterns
   // and unions them into related[] so the fact graph builds itself with zero extra work).

@@ -75,13 +75,3 @@ export function applyLens(
 export function buildLensMenu(): string {
   return [...loadLenses().values()].map((l) => `'${l.name}' — ${l.blurb}`).join("; ");
 }
-
-export function buildLensParamDescription(): string {
-  return (
-    "Analytical frame applied via the system prompt. OMIT to auto-apply the " +
-    "'default' second-opinion frame (skipped if you pass a custom `system`); " +
-    "pass 'none' to disable framing; or choose one: " +
-    buildLensMenu() +
-    ". Composes with `system`: lens first, then your system text."
-  );
-}

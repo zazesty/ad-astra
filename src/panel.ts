@@ -24,7 +24,7 @@ import {
   type GeminiResult,
   type GeminiTransport,
 } from "./geminiCore.js";
-import { applyLens, buildLensMenu, buildLensParamDescription } from "./lenses.js";
+import { applyLens, buildLensMenu } from "./lenses.js";
 import { judgeLabeledAnswers, runOracle, type FusionPreset } from "./oracleEngine.js";
 import {
   classifyError,
@@ -34,7 +34,7 @@ import {
   loggedReasoningEffort,
   recordSeatMetric,
 } from "./metrics.js";
-import { canStartAttempt, capAttemptMs, remainingMs, seatBudgetMs, withTimeout } from "./timeouts.js";
+import { canStartAttempt, capAttemptMs, mapLimitSettled, remainingMs, seatBudgetMs, withTimeout } from "./timeouts.js";
 import {
   CLAUDE_OPUS_OPENROUTER_SLUG,
   CLAUDE_SONNET_OPENROUTER_SLUG,
@@ -111,30 +111,6 @@ export function applyOpusRemap(spec: { model: string; model_slug?: string }): {
 // Concurrency cap: at N=2-3 it's a no-op; it only bites if a spec list grows
 // large enough to threaten per-provider rate/concurrency limits.
 const CONCURRENCY = 5;
-
-/** allSettled semantics WITH a concurrency cap, preserving input order. */
-async function mapLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T, idx: number) => Promise<R>,
-): Promise<PromiseSettledResult<R>[]> {
-  const results: PromiseSettledResult<R>[] = new Array(items.length);
-  let next = 0;
-  async function worker(): Promise<void> {
-    while (true) {
-      const i = next++;
-      if (i >= items.length) return;
-      try {
-        results[i] = { status: "fulfilled", value: await fn(items[i], i) };
-      } catch (reason) {
-        results[i] = { status: "rejected", reason };
-      }
-    }
-  }
-  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);
-  await Promise.all(workers);
-  return results;
-}
 
 export function registerAskPanel(server: any, opts: RegisterOpts) {
   const geminiClient: GeminiClient | null = makeGeminiClient(opts.geminiApiKey);
@@ -329,7 +305,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       }));
       const panelT0 = Date.now();
       const outerMs = budgetProfile.panelOuterMs;
-      const settled = await mapLimit(specs, CONCURRENCY, async (spec, idx) => {
+      const settled = await mapLimitSettled(specs, CONCURRENCY, async (spec, idx) => {
         const t0 = Date.now();
         const label = spec.label ?? spec.model;
         const seatId = `panel-${idx}-${label}`;
@@ -412,18 +388,23 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
           const { system, error } = applyLens(spec.lens, spec.system);
           if (error) throw new Error(error);
 
-          if (model === "grok") {
+          // grok / sol / opus / sonnet — OpenRouter weights-only (no native web/X plugin).
+          if (model === "grok" || isOrOnlyWeightsModel(model)) {
+            const reasoning_effort = model === "grok" ? ("medium" as const) : undefined;
             if (spec.grounded) {
               const msg =
-                "grok_x_search / grounded Grok is deprecated (Grok now routes via OpenRouter without native X search). " +
-                "Use model:'argon', grounded:true for live web search, or drop grounded for weights-only Grok.";
-              record(false, { error: msg, transport: "or", model_slug: defaultSlug, reasoning_effort: "medium" });
+                model === "grok"
+                  ? "grok_x_search / grounded Grok is deprecated (Grok now routes via OpenRouter without native X search). " +
+                    "Use model:'argon', grounded:true for live web search, or drop grounded for weights-only Grok."
+                  : `${model} seat has no native web/X grounding — use model:'argon', grounded:true ` +
+                    "for live web search (grok_x_search is deprecated), or drop grounded for weights-only.";
+              record(false, { error: msg, transport: "or", model_slug: defaultSlug, reasoning_effort });
               throw new Error(msg);
             }
             try {
               const r = await callOpenRouter(opts.openrouterApiKey, defaultSlug, spec.prompt, {
                 system,
-                reasoning_effort: "medium",
+                ...(reasoning_effort ? { reasoning_effort } : {}),
                 attempt_timeout_ms: capAttemptMs(t0, budget, budgetProfile.panelOrAttemptMs),
               });
               record(true, {
@@ -431,7 +412,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
                 citations: r.citations,
                 transport: "or",
                 model_slug: defaultSlug,
-                reasoning_effort: "medium",
+                reasoning_effort,
                 served_tier: r.service_tier,
               });
               return { text: r.text, citations: r.citations, transport: "or" as const };
@@ -442,41 +423,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
                 transport: "or",
                 timed_out: isAttemptTimeoutError(msg),
                 model_slug: defaultSlug,
-                reasoning_effort: "medium",
-              });
-              throw e;
-            }
-          }
-
-          // sol / opus / sonnet — OpenRouter weights-only (no native web/X plugin).
-          if (isOrOnlyWeightsModel(model)) {
-            if (spec.grounded) {
-              const msg =
-                `${model} seat has no native web/X grounding — use model:'argon', grounded:true ` +
-                "for live web search (grok_x_search is deprecated), or drop grounded for weights-only.";
-              record(false, { error: msg, transport: "or", model_slug: defaultSlug });
-              throw new Error(msg);
-            }
-            try {
-              const r = await callOpenRouter(opts.openrouterApiKey, defaultSlug, spec.prompt, {
-                system,
-                attempt_timeout_ms: capAttemptMs(t0, budget, budgetProfile.panelOrAttemptMs),
-              });
-              record(true, {
-                text: r.text,
-                citations: r.citations,
-                transport: "or",
-                model_slug: defaultSlug,
-                served_tier: r.service_tier,
-              });
-              return { text: r.text, citations: r.citations, transport: "or" as const };
-            } catch (e) {
-              const msg = (e as Error)?.message ?? String(e);
-              record(false, {
-                error: msg,
-                transport: "or",
-                timed_out: isAttemptTimeoutError(msg),
-                model_slug: defaultSlug,
+                reasoning_effort,
               });
               throw e;
             }

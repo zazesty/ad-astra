@@ -43,7 +43,7 @@ import {
   recordSeatMetric,
   type SeatMetricRecord,
 } from "./metrics.js";
-import { canStartAttempt, capAttemptMs, MIN_NEXT_ATTEMPT_MS, remainingMs, withTimeout } from "./timeouts.js";
+import { canStartAttempt, capAttemptMs, mapLimit, MIN_NEXT_ATTEMPT_MS, remainingMs, withTimeout } from "./timeouts.js";
 import {
   CLAUDE_SONNET_OPENROUTER_SLUG,
   GPT_OPENROUTER_SLUG,
@@ -241,9 +241,6 @@ export const GOOGLE_CALLER_PATTERN = [
   OPENROUTER_AUTO_SLUG,
 ];
 
-const CALLER_PATTERN = GROK_CALLER_PATTERN;
-const NO_GROK_CALLER_PATTERN = GROK_CALLER_PATTERN;
-
 function familyAlreadySeated(existing: Seat[], slug: string): boolean {
   if (isAutoSlug(slug)) return existing.some((s) => isAutoSlug(s.model_slug));
   if (/gpt/i.test(slug)) return existing.some((s) => /gpt/i.test(s.model_slug));
@@ -292,12 +289,6 @@ export function callerAwarePool(caller: CallerFamily, existing: Seat[]): string[
 function defaultCallerPool(existing: Seat[]): string[] {
   return callerAwarePool("grok", existing);
 }
-
-function noGrokCallerPool(existing: Seat[]): string[] {
-  return callerAwarePool("grok", existing);
-}
-/** @deprecated alias — same as defaultCallerPool. */
-const grokCallerPool = defaultCallerPool;
 
 function isAutoSlug(slug: string): boolean {
   return slug === OPENROUTER_AUTO_SLUG || slug === "openrouter/auto";
@@ -484,22 +475,6 @@ const MAX_TIMEOUT_RETRIES = 1;
 
 const isCapabilitySeat = (s: Seat): boolean => !!s.grok_grounding || !!s.grounded;
 const isFusionSeat = (s: Seat): boolean => s.model_slug === FUSION_MODEL_SLUG;
-
-/** Concurrency-capped map that never rejects — each item resolves to its own
- *  result (errors are caught into the SlotResult), order preserved. */
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  async function worker(): Promise<void> {
-    while (true) {
-      const i = next++;
-      if (i >= items.length) return;
-      out[i] = await fn(items[i]);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return out;
-}
 
 interface DispatchOutcome {
   text: string;

@@ -34,7 +34,7 @@ import {
   type FanoutRunRecord,
   type SeatMetricRecord,
 } from "./metrics.js";
-import { canStartAttempt, remainingMs, seatBudgetMs, withTimeout } from "./timeouts.js";
+import { canStartAttempt, mapLimitSettled, remainingMs, seatBudgetMs, withTimeout } from "./timeouts.js";
 import { type BudgetProfile } from "./budgetProfile.js";
 
 const OUTER_BUDGET_MS = 85_000;
@@ -94,28 +94,6 @@ export function dedupeCitations(urls: string[]): string[] {
     out.push(k);
   }
   return out;
-}
-
-async function mapLimitSettled<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T, idx: number) => Promise<R>,
-): Promise<PromiseSettledResult<R>[]> {
-  const results: PromiseSettledResult<R>[] = new Array(items.length);
-  let next = 0;
-  async function worker(): Promise<void> {
-    while (true) {
-      const i = next++;
-      if (i >= items.length) return;
-      try {
-        results[i] = { status: "fulfilled", value: await fn(items[i], i) };
-      } catch (reason) {
-        results[i] = { status: "rejected", reason };
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
 }
 
 const DECOMPOSE_SYSTEM = `You decompose a research question into independent evidence-seeking sub-queries.
