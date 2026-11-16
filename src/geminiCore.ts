@@ -28,6 +28,7 @@
  */
 
 import { GoogleGenAI, ServiceTier, ThinkingLevel } from "@google/genai";
+import { canStartAttempt, remainingMs } from "./timeouts.js";
 
 export const DEFAULT_GEMINI_MODEL = "gemini-4-argon";
 // Stable id. Argon is not a floating alias, so it does not take the "~"
@@ -475,4 +476,45 @@ export function extractOpenRouterResult(data: any): GeminiResult {
   }
   const service_tier = servedServiceTier(data);
   return service_tier ? { text, citations, service_tier } : { text, citations };
+}
+
+export interface GroundingRetryOpts {
+  maxRetries: number;
+  tag: string;
+  label: string;
+  budget?: { startedAt: number; budgetMs: number };
+  failMessage?: string;
+}
+
+/**
+ * Shared zero-citation fail-loud retry loop for grounded Gemini calls (panel,
+ * oracle, research_fanout). Retries up to `maxRetries` times when `citations`
+ * comes back empty (while `budget` permits another attempt), then throws a
+ * `grounding_fired:false` Error so callers never return a sourceless answer
+ * as if it were grounded.
+ */
+export async function withGroundingRetry(
+  once: () => Promise<GeminiResult>,
+  opts: GroundingRetryOpts,
+): Promise<GeminiResult> {
+  let r = await once();
+  for (let attempt = 1; attempt <= opts.maxRetries && r.citations.length === 0; attempt++) {
+    if (opts.budget && !canStartAttempt(opts.budget.startedAt, opts.budget.budgetMs)) {
+      console.error(
+        `[${opts.tag}] skip grounding retry, ${remainingMs(opts.budget.startedAt, opts.budget.budgetMs)}ms left. ${opts.label}`,
+      );
+      break;
+    }
+    console.error(
+      `[${opts.tag}] gemini grounded miss (0 citations) — retry ${attempt}/${opts.maxRetries}. ${opts.label}`,
+    );
+    r = await once();
+  }
+  if (r.citations.length === 0) {
+    throw new Error(
+      opts.failMessage ??
+        `grounding_fired:false — Gemini grounded request (${opts.label}) returned zero citations after ${opts.maxRetries} retries; refusing to pass back a weights-only answer as grounded.`,
+    );
+  }
+  return r;
 }

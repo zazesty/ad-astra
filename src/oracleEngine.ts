@@ -23,6 +23,7 @@ import {
   callGemini,
   makeGeminiClient,
   isTransientError,
+  withGroundingRetry,
   DEFAULT_OPENROUTER_GEMINI_MODEL,
   type FusionPreset,
   type GeminiResult,
@@ -507,24 +508,15 @@ async function groundedWithRetry(
   pathLabel: string,
   attemptBudget?: AttemptBudget,
 ): Promise<GeminiResult> {
-  let r = await once();
-  for (let attempt = 1; attempt <= MAX_GROUNDING_RETRIES && r.citations.length === 0; attempt++) {
-    if (attemptBudget && !canStartAttempt(attemptBudget.startedAt, attemptBudget.budgetMs)) {
-      console.error(
-        `[ask_oracle] skip grounding retry, ${remainingMs(attemptBudget.startedAt, attemptBudget.budgetMs)}ms left. seat=${seatId} path=${pathLabel}`,
-      );
-      break;
-    }
-    console.error(`[ask_oracle] gemini grounded miss (0 citations) — retry ${attempt}/${MAX_GROUNDING_RETRIES}. seat=${seatId} path=${pathLabel}`);
-    r = await once();
-  }
-  if (r.citations.length === 0) {
-    throw new Error(
+  return withGroundingRetry(once, {
+    maxRetries: MAX_GROUNDING_RETRIES,
+    tag: "ask_oracle",
+    label: `seat=${seatId} path=${pathLabel}`,
+    budget: attemptBudget,
+    failMessage:
       `grounding_fired:false — gemini grounded seat ${seatId} (${pathLabel}) returned zero citations after ` +
-        `${MAX_GROUNDING_RETRIES} retries; refusing to pass back a weights-only answer as grounded.`,
-    );
-  }
-  return r;
+      `${MAX_GROUNDING_RETRIES} retries; refusing to pass back a weights-only answer as grounded.`,
+  });
 }
 
 /** Grounded gemini seat with OR→direct failover. OR-native grounding first (fast,

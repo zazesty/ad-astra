@@ -210,7 +210,7 @@ if (touched(["researchFanout.ts", "modelPins.ts", "geminiCore.ts", "budgetProfil
   probes.push("research_fanout");
 }
 
-if (touched(["panel.ts", "oracleClassifier.ts", "oracleEngine.ts", "grokCore.ts", "grokXSearch.ts", "lenses.ts", "geminiCore.ts"])) {
+if (touched(["panel.ts", "oracleClassifier.ts", "oracleEngine.ts", "grokCore.ts", "lenses.ts", "geminiCore.ts"])) {
   console.log("verify-live: probing ask_panel...");
   const res = await callTool(
     "ask_panel",

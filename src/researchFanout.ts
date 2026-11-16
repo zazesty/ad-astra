@@ -11,6 +11,7 @@ import {
   callOpenRouter,
   callGemini,
   makeGeminiClient,
+  withGroundingRetry,
   DEFAULT_OPENROUTER_GEMINI_MODEL,
   type GeminiClient,
   type GeminiTransport,
@@ -34,7 +35,7 @@ import {
   type FanoutRunRecord,
   type SeatMetricRecord,
 } from "./metrics.js";
-import { canStartAttempt, mapLimitSettled, remainingMs, seatBudgetMs, withTimeout } from "./timeouts.js";
+import { mapLimitSettled, remainingMs, seatBudgetMs, withTimeout } from "./timeouts.js";
 import { type BudgetProfile } from "./budgetProfile.js";
 
 const OUTER_BUDGET_MS = 85_000;
@@ -336,17 +337,13 @@ async function runLeg(
                   model: GEMINI_HYDROGEN_DIRECT,
                 });
 
-          let r = await callOnce();
-          // Cap retries under budget: at most 1 miss-retry for fanout (tighter than panel).
-          if (r.citations.length === 0 && canStartAttempt(t0, budgetMs)) {
-            console.error(`[research_fanout] ${id} gemini grounded miss — retry 1/1`);
-            r = await callOnce();
-          }
-          if (r.citations.length === 0) {
-            throw new Error(
-              "grounding_fired:false — Gemini grounded leg returned zero citations after retries",
-            );
-          }
+          const r = await withGroundingRetry(callOnce, {
+            maxRetries: 1,
+            tag: "research_fanout",
+            label: id,
+            budget: { startedAt: t0, budgetMs },
+            failMessage: "grounding_fired:false — Gemini grounded leg returned zero citations after retries",
+          });
           return {
             ...base,
             status: "ok",

@@ -6,7 +6,7 @@
  *
  *   node test/geminiCore.test.mjs
  */
-import { extractOpenRouterResult, extractDirectCitations, servedServiceTier, OpenRouterError, isTransientError } from "../build/geminiCore.js";
+import { extractOpenRouterResult, extractDirectCitations, servedServiceTier, OpenRouterError, isTransientError, withGroundingRetry } from "../build/geminiCore.js";
 
 let pass = 0;
 let fail = 0;
@@ -139,6 +139,64 @@ console.log("\nUnit: extractDirectCitations (@google/genai groundingMetadata)");
     "transient: aborted due to timeout message",
     isTransientError(new Error("The operation was aborted due to timeout")) === true,
   );
+}
+
+console.log("\nUnit: withGroundingRetry");
+{
+  let calls = 0;
+  const r = await withGroundingRetry(
+    async () => {
+      calls++;
+      return { text: "ok", citations: ["https://example.com"] };
+    },
+    { maxRetries: 2, tag: "test", label: "immediate" },
+  );
+  check("withGroundingRetry immediate hit takes 1 call", calls === 1 && r.text === "ok");
+}
+{
+  let calls = 0;
+  const r = await withGroundingRetry(
+    async () => {
+      calls++;
+      return calls === 1
+        ? { text: "miss", citations: [] }
+        : { text: "hit", citations: ["https://example.com"] };
+    },
+    { maxRetries: 2, tag: "test", label: "retry-hit" },
+  );
+  check("withGroundingRetry recovers on retry", calls === 2 && r.text === "hit");
+}
+{
+  let calls = 0;
+  let errMsg = "";
+  try {
+    await withGroundingRetry(
+      async () => {
+        calls++;
+        return { text: "miss", citations: [] };
+      },
+      { maxRetries: 2, tag: "test", label: "exhaust" },
+    );
+  } catch (e) {
+    errMsg = e.message;
+  }
+  check("withGroundingRetry exhausts 1 + maxRetries and throws grounding_fired:false", calls === 3 && errMsg.includes("grounding_fired:false"));
+}
+{
+  let calls = 0;
+  let errMsg = "";
+  try {
+    await withGroundingRetry(
+      async () => {
+        calls++;
+        return { text: "miss", citations: [] };
+      },
+      { maxRetries: 2, tag: "test", label: "tight-budget", budget: { startedAt: Date.now(), budgetMs: 1_000 } },
+    );
+  } catch (e) {
+    errMsg = e.message;
+  }
+  check("withGroundingRetry skips retries when budget is tight", calls === 1 && errMsg.includes("grounding_fired:false"));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

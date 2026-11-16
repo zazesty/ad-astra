@@ -4,12 +4,13 @@
  * Omit specs and the same tool auto-fills families (the old ask_consortium).
  *
  * A 1-element spec array is the single-query path (this tool replaced the old
- * standalone ask_grok / ask_gemini). Live-X is model:grok + grounded:true
- * (auto contract). OpenAI + Claude (sonnet) are OR-only (pinned slugs).
+ * standalone ask_grok / ask_gemini). Live search uses model:'argon' + grounded:true
+ * (grok live-X search is deprecated; Grok routes via OpenRouter x-ai/grok-4.7).
+ * OpenAI + Claude (sonnet) + Grok are OR-only (pinned slugs).
  *
  * One spec failing must not nuke the others — we use an allSettled-style runner
- * (mapLimit) with a small concurrency cap so large batches don't trip
- * per-provider rate limits. Traffic flows through callGrok / callGemini /
+ * (mapLimitSettled) with a small concurrency cap so large batches don't trip
+ * per-provider rate limits. Traffic flows through callGemini /
  * callOpenRouter (no duplicated request logic).
  */
 
@@ -20,6 +21,7 @@ import {
   callOpenRouter,
   isTransientError,
   makeGeminiClient,
+  withGroundingRetry,
   type GeminiClient,
   type GeminiResult,
   type GeminiTransport,
@@ -474,29 +476,17 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             once: () => Promise<GeminiResult>,
             pathLabel: string,
           ) => {
-            let r = await once();
-            if (spec.grounded) {
-              for (let attempt = 1; attempt <= MAX_GROUNDING_RETRIES && r.citations.length === 0; attempt++) {
-                if (!canStartAttempt(t0, budget)) {
-                  console.error(
-                    `[ask_panel] skip grounding retry, ${remainingMs(t0, budget)}ms left. label=${label} path=${pathLabel}`,
-                  );
-                  break;
-                }
-                console.error(
-                  `[ask_panel] gemini grounded miss (0 citations) — retry ${attempt}/${MAX_GROUNDING_RETRIES}. label=${label} path=${pathLabel}`,
-                );
-                r = await once();
-              }
-              if (r.citations.length === 0) {
-                throw new Error(
-                  `grounding_fired:false — Gemini grounded request returned zero citations after ` +
-                    `${MAX_GROUNDING_RETRIES} retries (${pathLabel}). Refusing to pass back a weights-only answer as if ` +
-                    `it were grounded; the answer may be stale/hallucinated. Retry or rephrase to demand sources.`,
-                );
-              }
-            }
-            return r;
+            if (!spec.grounded) return once();
+            return withGroundingRetry(once, {
+              maxRetries: MAX_GROUNDING_RETRIES,
+              tag: "ask_panel",
+              label: `label=${label} path=${pathLabel}`,
+              budget: { startedAt: t0, budgetMs: budget },
+              failMessage:
+                `grounding_fired:false — Gemini grounded request returned zero citations after ` +
+                `${MAX_GROUNDING_RETRIES} retries (${pathLabel}). Refusing to pass back a weights-only answer as if ` +
+                `it were grounded; the answer may be stale/hallucinated. Retry or rephrase to demand sources.`,
+            });
           };
 
           try {
