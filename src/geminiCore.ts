@@ -27,7 +27,7 @@
  * annotations when grounding ran.
  */
 
-import { GoogleGenAI, ServiceTier, ThinkingLevel } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { canStartAttempt, remainingMs } from "./timeouts.js";
 
 export const DEFAULT_GEMINI_MODEL = "gemini-4-neon";
@@ -72,16 +72,13 @@ export function wireReasoningEffort(
 }
 
 /**
- * Google priority is a Tier 2/3 reservation. This project is Tier 1, and Flash,
- * Hydrogen, and Flash-Lite are shed to standard (2026-11-05). Neon also omits
- * priority (probe 2026-11-18): AI Studio BYOK sheds to default, while Vertex
- * ("Google") serves priority at ~1.8x credit cost with no p50/p90 latency win.
- * Argon and other non-Flash Gemini still ask. Sol fast is separate.
+ * @deprecated Google priority is deprecated for all Gemini calls (2026-11-18).
+ * AI Studio direct and BYOK shed priority to default/standard on Tier 1, while
+ * OpenRouter Vertex fallback serves priority at ~1.8x credit cost with no latency
+ * win. Kept returning false for test/caller back-compat. Sol fast is separate.
  */
-export function geminiRequestsPriority(model: string): boolean {
-  if (!/gemini/i.test(model)) return false;
-  if (/flash/i.test(model) || /hydrogen/i.test(model) || /neon/i.test(model)) return false;
-  return true;
+export function geminiRequestsPriority(_model: string): boolean {
+  return false;
 }
 
 /**
@@ -233,7 +230,6 @@ export async function callGemini(
       ...(opts.response_schema
         ? { responseMimeType: "application/json", responseSchema: opts.response_schema }
         : {}),
-      ...(geminiRequestsPriority(resolvedModel) ? { serviceTier: ServiceTier.PRIORITY } : {}),
     },
   });
   const ms = Date.now() - t0;
@@ -316,10 +312,9 @@ export interface CallOpenRouterOpts {
  *     field even on Neon/Argon. Sonnet is sent medium. GPT, Grok, auto, and fusion
  *     omit the field (Sol's own default is medium; Grok's own default is high).
  *     Gemini 2.5 Flash still 400s on thinkingLevel, so it is excluded.
- *   - Service tier: Neon, Flash, Hydrogen, and Flash-Lite omit it (Tier 1
- *     BYOK sheds to default; Vertex serves Neon priority at 1.8x cost with
- *     no latency win). Argon and other non-Flash Gemini still ask "priority".
- *     Sol-family slugs send "fast" (same OpenRouter preference: priority endpoints
+ *   - Service tier: deprecated for all Gemini models (2026-11-18; Tier 1 AI
+ *     Studio sheds to default, while Vertex fallback bills ~1.8x with no latency
+ *     win). Sol-family slugs send "fast" (OpenRouter preference: priority endpoints
  *     first, then default, billed as served). Anthropic speed and xAI priority
  *     stay off. Do not pin provider.only — that removes the fallback.
  */
@@ -350,11 +345,10 @@ export async function callOpenRouter(
 
   const body: Record<string, unknown> = { model, messages };
   if (effort && supportsEffort) body.reasoning = { effort };
-  // Preference only. Neon, Flash, Hydrogen, and Flash-Lite omit the field.
-  // Argon still asks for Google priority. Sol family sends OpenAI fast (falls
-  // back to default and is billed as served). No provider.only pin.
-  if (isGemini && geminiRequestsPriority(model)) body.service_tier = "priority";
-  else if (isOpenAiSolSlug(model)) body.service_tier = "fast";
+  // Preference only. Google priority is deprecated across all Gemini models.
+  // Sol family sends OpenAI fast (falls back to default and is billed as served).
+  // No provider.only pin.
+  if (isOpenAiSolSlug(model)) body.service_tier = "fast";
   const serviceTier = typeof body.service_tier === "string" ? body.service_tier : "default";
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
   if (opts.response_format) body.response_format = opts.response_format;

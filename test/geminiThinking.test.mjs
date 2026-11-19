@@ -33,11 +33,11 @@ check("or hydrogen does not ask priority", !geminiRequestsPriority("google/gemin
 check("hydrogen explicit medium effort honored", wireReasoningEffort("google/gemini-4-hydrogen", "medium") === "medium");
 check("flash-lite does not ask priority", !geminiRequestsPriority("google/gemini-3.5-flash-lite"));
 check("direct flash-lite does not ask priority", !geminiRequestsPriority("gemini-3.5-flash-lite"));
-check("argon still asks priority", geminiRequestsPriority("google/gemini-4-argon"));
-check("direct argon still asks priority", geminiRequestsPriority("gemini-4-argon"));
+check("argon no longer asks priority (deprecated)", !geminiRequestsPriority("google/gemini-4-argon"));
+check("direct argon no longer asks priority", !geminiRequestsPriority("gemini-4-argon"));
 check("neon does not ask priority", !geminiRequestsPriority("google/gemini-4-neon"));
 check("direct neon does not ask priority", !geminiRequestsPriority("gemini-4-neon"));
-check("pro still asks priority", geminiRequestsPriority("~google/gemini-pro-latest"));
+check("pro no longer asks priority (deprecated)", !geminiRequestsPriority("~google/gemini-pro-latest"));
 check("sol is not gemini priority", !geminiRequestsPriority("~openai/gpt-sol-latest"));
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -14,8 +14,8 @@ export type MetricsTool = "oracle" | "panel" | "research_fanout";
 // Do not pool eras.
 // Sol fast is on (2026-10-03 reopen): OpenAI Sol slugs send service_tier "fast"
 // from callOpenRouter. Anthropic speed:fast and xAI priority stay scrubbed.
-// Argon and other non-Flash/Neon Gemini keep service_tier "priority". Flash,
-// Hydrogen, Flash-Lite, and Neon omit it.
+// Google priority is deprecated for all Gemini models (2026-11-18: Tier 1 AI
+// Studio sheds to default while Vertex fallback bills ~1.8x with no latency win).
 // Do not add the scrubbed Anthropic/xAI tiers back.
 // served_tier (2026-10-13) is the OpenRouter response field, not the request.
 // A Sol fast hit is "priority". A shed is "default". Absent means no response
