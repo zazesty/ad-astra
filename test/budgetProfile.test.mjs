@@ -72,8 +72,9 @@ check(
   applyOpusRemap({ model: "opus", model_slug: "~anthropic/claude-sonnet-latest" }).model_slug ===
     "~anthropic/claude-sonnet-latest",
 );
-check("gemini token normalizes to argon", normalizePanelModel("gemini") === "argon");
-check("argon token stays argon", normalizePanelModel("argon") === "argon");
+check("gemini token normalizes to neon", normalizePanelModel("gemini") === "neon");
+check("argon token normalizes to neon", normalizePanelModel("argon") === "neon");
+check("neon token stays neon", normalizePanelModel("neon") === "neon");
 check("openai token normalizes to sol", normalizePanelModel("openai") === "sol");
 check("sol token stays sol", normalizePanelModel("sol") === "sol");
 

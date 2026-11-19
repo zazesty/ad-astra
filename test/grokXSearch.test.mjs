@@ -147,7 +147,7 @@ console.log("\nUnit: ask_panel Grok OpenRouter routing & soft-deprecated X searc
     check("ask_panel model:'grok' grounded:true fails cleanly", Array.isArray(parsedDep) && parsedDep[0]?.ok === false);
     check(
       "ask_panel model:'grok' grounded:true returns deprecation message",
-      typeof parsedDep[0]?.error === "string" && /deprecated/i.test(parsedDep[0].error) && /argon/i.test(parsedDep[0].error),
+      typeof parsedDep[0]?.error === "string" && /deprecated/i.test(parsedDep[0].error) && /neon/i.test(parsedDep[0].error),
     );
     check("ask_panel model:'grok' grounded:true makes no fetch call", seen.length === 1);
   } finally {

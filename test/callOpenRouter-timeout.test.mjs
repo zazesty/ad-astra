@@ -148,6 +148,11 @@ async function run() {
     const argon = await tierFor("google/gemini-4-argon");
     check("argon tier stays priority", argon.service_tier === "priority" && argon.model === "google/gemini-4-argon");
     check("omitted argon effort is medium", argon.reasoning?.effort === "medium");
+    const neon = await tierFor("google/gemini-4-neon");
+    check("neon does not ask priority", neon.service_tier === undefined && neon.model === "google/gemini-4-neon");
+    check("omitted neon effort is medium", neon.reasoning?.effort === "medium");
+    const neonNull = await tierFor("google/gemini-4-neon", null);
+    check("null neon effort is unset", neonNull.reasoning === undefined && neonNull.service_tier === undefined);
     const bareGemini = await tierFor("gemini-2.5-flash");
     check("bare flash does not ask priority", bareGemini.service_tier === undefined && bareGemini.model === "google/gemini-2.5-flash");
     for (const slug of ["openai/gpt-6-luna", "openrouter/auto-beta", "~anthropic/claude-sonnet-latest", "x-ai/grok-4.7"]) {

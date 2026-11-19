@@ -38,21 +38,36 @@ export function loadLenses(): Map<string, Lens> {
 // Returns {error} (with the valid menu) when an unknown lens name is passed.
 const DEFAULT_LENS = "default";
 
+export function normalizeLensName(
+  lensName: string | undefined,
+  system?: string,
+): string {
+  const requested = (lensName ?? "").trim().toLowerCase();
+  if (requested === "none" || requested === "off") return "none";
+  if (!requested) {
+    if (system && system.trim()) return "none";
+    const def = loadLenses().get(DEFAULT_LENS);
+    return def ? def.name : "none";
+  }
+  const lens = loadLenses().get(requested);
+  return lens ? lens.name : "invalid";
+}
+
 export function applyLens(
   lensName: string | undefined,
   system: string | undefined,
-): { system?: string; error?: string } {
+): { system?: string; error?: string; lens: string } {
   const requested = (lensName ?? "").trim().toLowerCase();
 
   // Explicit opt-out of any framing.
-  if (requested === "none" || requested === "off") return { system };
+  if (requested === "none" || requested === "off") return { system, lens: "none" };
 
   // No lens specified: auto-apply the default second-opinion frame — but only
   // when the caller didn't supply their own system text (a custom system wins).
   if (!requested) {
-    if (system && system.trim()) return { system };
+    if (system && system.trim()) return { system, lens: "none" };
     const def = loadLenses().get(DEFAULT_LENS);
-    return { system: def ? def.body : system };
+    return { system: def ? def.body : system, lens: def ? def.name : "none" };
   }
 
   const lenses = loadLenses();
@@ -61,9 +76,10 @@ export function applyLens(
     const names = [...lenses.values()].map((l) => l.name).join(", ");
     return {
       error: `Unknown lens "${lensName}". Available: ${names || "(none)"}. Read the lenses://frames resource for the menu.`,
+      lens: "invalid",
     };
   }
-  return { system: system ? `${lens.body}\n\n${system}` : lens.body };
+  return { system: system ? `${lens.body}\n\n${system}` : lens.body, lens: lens.name };
 }
 
 // Built from lenses.md at tool-registration time so the menu is visible IN THE

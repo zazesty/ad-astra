@@ -28,7 +28,7 @@ import {
   type FusionPreset,
   type GeminiResult,
 } from "./geminiCore.js";
-import { applyLens } from "./lenses.js";
+import { applyLens, normalizeLensName } from "./lenses.js";
 import {
   classify,
   prefilter,
@@ -151,7 +151,7 @@ export function capEffort(effort: Effort, max?: Effort): Effort {
   return max && EFFORT_RANK[effort] > EFFORT_RANK[max] ? max : effort;
 }
 
-// Gemini reasoning/grounded slug. Stable Gemini 4 Argon id (no "~").
+// Gemini reasoning/grounded slug. Stable Gemini 4 Neon id (no "~").
 // Single source of truth = geminiCore's export, so the gemini-model-check
 // monitor covers oracle's seats too. The const name is historical.
 const GEMINI_PRO_SLUG = DEFAULT_OPENROUTER_GEMINI_MODEL;
@@ -182,7 +182,7 @@ const DEFAULT_REASONING_POOL = [OPENROUTER_AUTO_SLUG, GEMINI_PRO_SLUG];
  * Full cross-family fill (opt-in via exclude_family:"none"|"off"): gemini → grok →
  * gpt → auto-beta. Use when the CALLER is not Grok (e.g. claude.ai) and a
  * grok-direct contrarian opinion seat is wanted. Default path is `defaultCallerPool`
- * (grok, argon, sol, auto-beta).
+ * (grok, neon, sol, auto-beta).
  */
 function panelFillPool(existing: Seat[]): string[] {
   const haveGrok = existing.some((s) => s.provider === "grok-direct" || isGrokSlug(s.model_slug));
@@ -262,7 +262,7 @@ export function resolveCallerFamily(ov: OracleOverrides): CallerFamily {
   if (ov.exclude_family === "grok") return "grok";
   if (ov.exclude_family === "claude" || ov.exclude_family === "sonnet") return "claude";
   if (ov.exclude_family === "openai" || ov.exclude_family === "gpt" || ov.exclude_family === "sol") return "openai";
-  if (ov.exclude_family === "google" || ov.exclude_family === "gemini" || ov.exclude_family === "argon") return "google";
+  if (ov.exclude_family === "google" || ov.exclude_family === "gemini" || ov.exclude_family === "argon" || ov.exclude_family === "neon") return "google";
   return "unknown";
 }
 
@@ -382,7 +382,7 @@ export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] 
   const want = ov.n ?? floor;
   const target = Math.max(want, seats.length, 1);
   // Reasoning-pool fill — purely AUTO, no hand-pick (naming exact models is
-  // ask_panel's job). DEFAULT: multi-seat → Grok, Argon, Sol,
+  // ask_panel's job). DEFAULT: multi-seat → Grok, Neon, Sol,
   // auto-beta as the 4th. exclude_family is not a caller knob.
   // "grok" remains a legacy flag for no grok opinion seat (forces Sonnet at n=1,
   // and sonnet-first at n>=2). "none"/"off" restores full cross-family including
@@ -763,6 +763,7 @@ function recordOracleMetrics(
   prompt: string,
   route: RoutePlan,
   results: SlotResult[],
+  callerSystem?: string,
 ): void {
   const qHash = hashQuestion(prompt);
   const preview = process.env.METRICS_LOG_PROMPTS === "1" ? prompt : undefined;
@@ -795,6 +796,7 @@ function recordOracleMetrics(
       question_hash: qHash,
       prompt_preview: preview,
       served_tier: r.served_tier,
+      lens: normalizeLensName(r.seat.lens, callerSystem),
     };
     void recordSeatMetric(rec);
   }
@@ -815,10 +817,10 @@ async function synthesize(
     "You are a synthesizer. Merge the labeled model answers below into ONE coherent answer. " +
     "State points of agreement plainly; surface genuine disagreements explicitly rather than averaging them away; " +
     "preserve citations. Do not mention that you are merging multiple sources.";
-  // Judge is PINNED to gemini-4-argon, not openrouter/auto-beta: synthesis is a
+  // Judge is PINNED to gemini-4-neon, not openrouter/auto-beta: synthesis is a
   // fixed, well-defined task that wants a strong, predictable reasoner — auto
   // optimizes per-prompt and could route a "merge these" call somewhere weak/
-  // unexpected. Medium, same cap as the Argon seat. (NB: deliberately NOT
+  // unexpected. Medium, same cap as the Neon seat. (NB: deliberately NOT
   // openrouter/fusion — Fusion runs its OWN panel, which would re-answer +
   // double-spend over seats we already ran; Fusion is reserved as a separate
   // optional hard-route ENGINE, see spec §6a.)
@@ -1050,7 +1052,7 @@ export async function runOracle(
       console.error(`[ask_oracle] salvage seat also failed: ${(e as Error)?.message ?? e}`);
     }
   }
-  recordOracleMetrics(prompt, route, results);
+  recordOracleMetrics(prompt, route, results, ov.system);
   return assemble(deps, route, results, ov, !!classifierError, oracleT0);
 }
 

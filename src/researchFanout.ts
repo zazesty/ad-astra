@@ -173,6 +173,7 @@ export function fanoutPhaseSeatRecords(input: {
   decompose_source: "classifier" | "fallback_single" | "not_run";
   synth_ms?: number;
   synth_error?: string;
+  synth_lens?: string;
   gemini_transport: "or" | "direct";
 }): SeatMetricRecord[] {
   const out: SeatMetricRecord[] = [];
@@ -197,6 +198,7 @@ export function fanoutPhaseSeatRecords(input: {
       degraded: !ok,
       error_class: ok ? undefined : "other",
       question_hash: input.question_hash,
+      lens: "none",
     });
   }
   if (input.synth_ms != null) {
@@ -221,6 +223,7 @@ export function fanoutPhaseSeatRecords(input: {
       degraded: !ok,
       error_class: classifyError(timedOut ? "timeout" : ok ? "ok" : "error", input.synth_error),
       question_hash: input.question_hash,
+      lens: input.synth_lens ?? "none",
     });
   }
   return out;
@@ -311,6 +314,7 @@ async function runLeg(
       error_class: classifyError(leg.status === "timeout" ? "timeout" : ok ? "ok" : "error", leg.error),
       question_hash: qHash,
       served_tier: leg.served_tier,
+      lens: "none",
     });
   };
 
@@ -426,8 +430,8 @@ async function synthesize(
   const user = `Original question:\n${prompt}\n\nEvidence legs:\n${blocks}`;
 
   // Synth can exceed the default 15s OR attempt abort. Effort is omitted so
-  // Google's Argon default (medium) applies. High missed the chat abort on
-  // the 2026-10-13 bakeoff, which is why this is not left to the Argon wire.
+  // Google's Neon default applies. High missed the chat abort on Argon in the
+  // 2026-10-13 bakeoff, which is why this is not left to the Argon/Neon wire.
   const attemptMs = Math.min(Math.max(budgetMs - 200, 5_000), 55_000);
   const r = await withTimeout(
     geminiTransport === "openrouter" || !geminiClient
@@ -458,7 +462,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           "labor + technology + supply chain in a region. Fans out fixed independent sub-questions; use native deep " +
           "research when you need to steer an evolving iterative loop. This is not an opinion panel or live-news wire. " +
           "Strategy/opinion/tradeoffs → ask_panel with specs omitted. Live X search (grok_x_search) is deprecated; " +
-          "use web-grounded search (model:'argon', grounded:true or research_fanout) instead. Re-scope vague prompts " +
+          "use web-grounded search (model:'neon', grounded:true or research_fanout) instead. Re-scope vague prompts " +
           "first. Trivial textbook constants may fail with grounding_miss, degraded:true and no answer. Flow: " +
           "decompose up to max_legs (fewer when sufficient), run independent parallel web-grounded Gemini 4 Hydrogen " +
           "legs, then merge with citation union; no nested tools. synthesize:false returns raw legs. Independent " +
@@ -532,6 +536,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
       const geminiTransport: "or" | "direct" = opts.geminiTransport === "openrouter" ? "or" : "direct";
       let decomposeSource: "classifier" | "fallback_single" | "not_run" = "not_run";
       let synthError: string | undefined;
+      let synthLens: string | undefined;
       let degraded = false;
       let legCount = 0;
       let okLegs = 0;
@@ -560,6 +565,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
             decompose_source: decomposeSource,
             synth_ms: phases.synth_ms,
             synth_error: synthError,
+            synth_lens: synthLens,
             gemini_transport: geminiTransport,
           }),
         );
@@ -613,6 +619,7 @@ export function registerResearchFanout(server: any, opts: RegisterOpts) {
           const synthT0 = Date.now();
           const synthBudget = Math.min(SYNTH_CAP_MS, remainingMs(outerT0, outerBudgetMs));
           const lensed = applyLens(args.lens, args.system);
+          synthLens = lensed.error ? "none" : lensed.lens;
           const sys = lensed.error ? args.system : lensed.system;
           try {
             answer = await synthesize(

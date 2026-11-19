@@ -10,12 +10,19 @@ import {
   recordFanoutRun,
   summarizeFanoutRuns,
   computeMetricsStats,
+  queryMetrics,
   hashQuestion,
   familyFromSlug,
   classifyError,
   isAttemptTimeoutError,
   loggedReasoningEffort,
 } from "../build/metrics.js";
+import { applyLens, normalizeLensName } from "../build/lenses.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { registerAskPanel } from "../build/panel.js";
+import { CLI_BUDGET } from "../build/budgetProfile.js";
 
 let pass = 0;
 let fail = 0;
@@ -35,6 +42,9 @@ check("hashQuestion stable", hashQuestion("hello").length === 16);
 check("omitted flash logs unspecified", loggedReasoningEffort("~google/gemini-flash-latest", undefined) === "unspecified");
 check("null effort logs unspecified", loggedReasoningEffort("google/gemini-4-argon", null) === "unspecified");
 check("omitted argon logs medium", loggedReasoningEffort("google/gemini-4-argon", undefined) === "medium");
+check("omitted neon logs medium", loggedReasoningEffort("google/gemini-4-neon", undefined) === "medium");
+check("null neon effort logs unspecified", loggedReasoningEffort("google/gemini-4-neon", null) === "unspecified");
+check("omitted neon token logs medium", loggedReasoningEffort("neon", undefined) === "medium");
 check("omitted bare gemini logs medium", loggedReasoningEffort("gemini", undefined) === "medium");
 check("omitted argon token logs medium", loggedReasoningEffort("argon", undefined) === "medium");
 check("omitted sonnet logs medium", loggedReasoningEffort("~anthropic/claude-sonnet-latest", undefined) === "medium");
@@ -48,6 +58,8 @@ check("familyFromSlug grok", familyFromSlug("grok", "grok-direct") === "grok");
 check("familyFromSlug gemini", familyFromSlug("~google/gemini-pro-latest") === "gemini");
 check("familyFromSlug argon token", familyFromSlug("argon") === "gemini");
 check("familyFromSlug argon slug", familyFromSlug("google/gemini-4-argon") === "gemini");
+check("familyFromSlug neon token", familyFromSlug("neon") === "gemini");
+check("familyFromSlug neon slug", familyFromSlug("google/gemini-4-neon") === "gemini");
 check("familyFromSlug fusion", familyFromSlug("openrouter/fusion") === "fusion");
 check("familyFromSlug claude opus", familyFromSlug("anthropic/claude-opus-5") === "claude");
 check("familyFromSlug claude sonnet", familyFromSlug("anthropic/claude-sonnet-5") === "claude");
@@ -139,13 +151,75 @@ try {
   check("summarizeFanoutRuns synth n excludes skips", fanoutStats.synth_ms.n === 1);
 
   const stats = computeMetricsStats([
-    { latency_ms: 100, grounded_requested: true, grounding_fired: false, failover_fired: true, timed_out: false, ok: true, degraded: false, tool: "oracle", seat_id: "a", family: "gemini", model_slug: "g", transport: "or", x_search_fired: false, reasoning_effort: "high", question_hash: "x", ts: new Date().toISOString() },
-    { latency_ms: 200, grounded_requested: false, grounding_fired: false, failover_fired: false, timed_out: false, ok: false, degraded: true, tool: "oracle", seat_id: "b", family: "grok", model_slug: "grok", transport: "direct", x_search_fired: false, reasoning_effort: "medium", question_hash: "x", ts: new Date().toISOString() },
+    { latency_ms: 100, grounded_requested: true, grounding_fired: false, failover_fired: true, timed_out: false, ok: true, degraded: false, tool: "oracle", seat_id: "a", family: "gemini", model_slug: "g", transport: "or", x_search_fired: false, reasoning_effort: "high", question_hash: "x", ts: new Date().toISOString(), lens: "default" },
+    { latency_ms: 200, grounded_requested: false, grounding_fired: false, failover_fired: false, timed_out: false, ok: false, degraded: true, tool: "oracle", seat_id: "b", family: "grok", model_slug: "grok", transport: "direct", x_search_fired: false, reasoning_effort: "medium", question_hash: "x", ts: new Date().toISOString(), lens: "pre-mortem" },
+    { latency_ms: 300, grounded_requested: false, grounding_fired: false, failover_fired: false, timed_out: false, ok: true, degraded: false, tool: "panel", seat_id: "c", family: "claude", model_slug: "sonnet", transport: "or", x_search_fired: false, reasoning_effort: "medium", question_hash: "x", ts: new Date().toISOString() },
   ]);
-  check("computeMetricsStats overall count", stats.overall.seat_count === 2);
-  check("computeMetricsStats p50", stats.overall.latency_ms.p50 === 100);
-  // B1: degraded_rate is per-seat (1/2), not run-level all-true.
-  check("computeMetricsStats degraded_rate", stats.overall.degraded_rate === 0.5);
+  check("computeMetricsStats overall count", stats.overall.seat_count === 3);
+  check("computeMetricsStats p50", stats.overall.latency_ms.p50 === 200);
+  // B1: degraded_rate is per-seat (1/3), not run-level all-true.
+  check("computeMetricsStats degraded_rate", Math.abs(stats.overall.degraded_rate - 1 / 3) < 1e-9);
+
+  const byLens = computeMetricsStats([
+    { latency_ms: 100, grounded_requested: false, grounding_fired: false, failover_fired: false, timed_out: false, ok: true, degraded: false, tool: "panel", seat_id: "a", family: "gemini", model_slug: "g", transport: "or", x_search_fired: false, reasoning_effort: "medium", question_hash: "x", ts: new Date().toISOString(), lens: "default" },
+    { latency_ms: 250, grounded_requested: false, grounding_fired: false, failover_fired: false, timed_out: false, ok: true, degraded: false, tool: "panel", seat_id: "b", family: "grok", model_slug: "grok", transport: "or", x_search_fired: false, reasoning_effort: "medium", question_hash: "x", ts: new Date().toISOString(), lens: "pre-mortem" },
+    { latency_ms: 400, grounded_requested: false, grounding_fired: false, failover_fired: false, timed_out: false, ok: true, degraded: false, tool: "panel", seat_id: "c", family: "claude", model_slug: "sonnet", transport: "or", x_search_fired: false, reasoning_effort: "medium", question_hash: "x", ts: new Date().toISOString() },
+  ], "lens");
+  check("computeMetricsStats group_by lens keys", Object.keys(byLens.by_group).join(",") === "default,pre-mortem,unknown");
+  check("computeMetricsStats group_by lens p50", byLens.by_group["pre-mortem"].latency_ms.p50 === 250);
+  check("normalizeLensName default", normalizeLensName(undefined, undefined) === "default");
+  check("normalizeLensName custom system suppresses default", normalizeLensName(undefined, "be terse") === "none");
+  check("normalizeLensName off -> none", normalizeLensName("off", undefined) === "none");
+  check("normalizeLensName invalid -> invalid", normalizeLensName("definitely-not-a-lens-secret-prompt", undefined) === "invalid");
+  check("applyLens returns canonical lens name", applyLens("PRE-MORTEM", "extra").lens === "pre-mortem");
+
+  // End-to-end mocked panel -> lens seat metric -> queryMetrics(group_by:"lens") + Neon wire check.
+  {
+    const realFetch = globalThis.fetch;
+    const bodies = [];
+    globalThis.fetch = async (_url, init) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "Neon answer." }, finish_reason: "stop" }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const srv = new McpServer({ name: "metrics-lens-test", version: "1.0.0" });
+    registerAskPanel(srv, {
+      xaiApiKey: undefined,
+      geminiApiKey: undefined,
+      openrouterApiKey: "test-or-key",
+      geminiTransport: "openrouter",
+      budget: CLI_BUDGET,
+    });
+    const cli = new Client({ name: "metrics-lens-client", version: "1.0.0" });
+    await Promise.all([srv.connect(st), cli.connect(ct)]);
+    try {
+      await cli.callTool({
+        name: "ask_panel",
+        arguments: {
+          prompt: "Check lens logging",
+          specs: [
+            { model: "neon", lens: "pre-mortem", label: "n1" },
+            { model: "argon", lens: "none", label: "n2" },
+          ],
+        },
+      });
+      await new Promise((r) => setTimeout(r, 80));
+      const lensStats = await queryMetrics({ window_days: 1, group_by: "lens", tool: "panel" });
+      check("panel logs pre-mortem lens", lensStats.by_group["pre-mortem"]?.seat_count === 1);
+      check("panel logs none lens for stale argon", lensStats.by_group["none"]?.seat_count === 1);
+      check("neon & stale argon both send google/gemini-4-neon", bodies.length === 2 && bodies.every((b) => b.model === "google/gemini-4-neon"));
+      check("neon & stale argon both send medium effort without priority", bodies.every((b) => b.reasoning?.effort === "medium" && b.service_tier === undefined));
+    } finally {
+      await cli.close();
+      await srv.close();
+      globalThis.fetch = realFetch;
+    }
+  }
 
   // Forced write failure must not throw — point STATE_DIRECTORY at a file (mkdir fails).
   const blocker = join(stateDir, "not-a-dir");

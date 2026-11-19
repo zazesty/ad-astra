@@ -4,7 +4,7 @@
  * Omit specs and the same tool auto-fills families (the old ask_consortium).
  *
  * A 1-element spec array is the single-query path (this tool replaced the old
- * standalone ask_grok / ask_gemini). Live search uses model:'argon' + grounded:true
+ * standalone ask_grok / ask_gemini). Live search uses model:'neon' + grounded:true
  * (grok live-X search is deprecated; Grok routes via OpenRouter x-ai/grok-4.7).
  * OpenAI + Claude (sonnet) + Grok are OR-only (pinned slugs).
  *
@@ -26,7 +26,7 @@ import {
   type GeminiResult,
   type GeminiTransport,
 } from "./geminiCore.js";
-import { applyLens, buildLensMenu } from "./lenses.js";
+import { applyLens, buildLensMenu, normalizeLensName } from "./lenses.js";
 import { judgeLabeledAnswers, runOracle, type FusionPreset } from "./oracleEngine.js";
 import {
   classifyError,
@@ -89,9 +89,9 @@ type RegisterOpts = {
   callerFamily?: CallerFamily;
 };
 
-/** Public enum is argon and sol. Stale gemini and openai tokens still run those seats. */
+/** Public enum is neon and sol. Stale gemini, argon, and openai tokens still run those seats. */
 export function normalizePanelModel(model: unknown): unknown {
-  if (model === "gemini") return "argon";
+  if (model === "gemini" || model === "argon") return "neon";
   if (model === "openai") return "sol";
   return model;
 }
@@ -123,12 +123,12 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
     model: z.preprocess(
       normalizePanelModel,
       z
-        .enum(["grok", "argon", "sol", "sonnet"])
+        .enum(["grok", "neon", "sol", "sonnet"])
         .describe(
-          "Backend: 'grok' (OpenRouter, x-ai/grok-4.7; contrarian); 'argon' (Gemini 4 Argon; " +
+          "Backend: 'grok' (OpenRouter, x-ai/grok-4.7; contrarian); 'neon' (Gemini 4 Neon; " +
           "reasoning/live web); 'sol' (OpenRouter, GPT Sol latest); 'sonnet' (Sonnet latest, medium). " +
           "sol/sonnet/grok have no native web/X grounding: grounded:true errors (grok_x_search is deprecated; use " +
-          "'argon' grounded:true for live search).",
+          "'neon' grounded:true for live search).",
         ),
     ),
     prompt: z
@@ -146,13 +146,13 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .boolean()
       .optional()
       .describe(
-        "Set true for factual/current questions to use live retrieval (Argon uses Google Search). " +
-          "sol/sonnet/grok error if true (grok live-X search is deprecated; use model:'argon', grounded:true). Default false.",
+        "Set true for factual/current questions to use live retrieval (Neon uses Google Search). " +
+          "sol/sonnet/grok error if true (grok live-X search is deprecated; use model:'neon', grounded:true). Default false.",
       ),
     include_web: z
       .boolean()
       .optional()
-      .describe("Deprecated (no-op; grok live-X/web grounding is retired — use model:'argon', grounded:true for live web search)."),
+      .describe("Deprecated (no-op; grok live-X/web grounding is retired — use model:'neon', grounded:true for live web search)."),
     system: z
       .string()
       .optional()
@@ -164,7 +164,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       .optional()
       .describe(
         "Advanced exact model-id override (x-ai/grok-*, gemini-*, OpenRouter openai/* or anthropic/*). Omit unless known: " +
-          "defaults are x-ai/grok-4.7, GPT Sol latest, Sonnet latest and Gemini 4 Argon for grok/sol/sonnet/argon.",
+          "defaults are x-ai/grok-4.7, GPT Sol latest, Sonnet latest and Gemini 4 Neon for grok/sol/sonnet/neon.",
       ),
   });
 
@@ -175,11 +175,11 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
       description:
         "Ask one question across models for independent answers, opinions or tradeoffs; use research_fanout for " +
           "multi-hop evidence. Omit specs to let the classifier select 1–4 frontier seats, with caller-family avoidance " +
-          "in the reasoning pool: Grok, Sonnet, Argon and Sol, with openrouter/auto-beta as overflow. min_perspectives " +
+          "in the reasoning pool: Grok, Sonnet, Neon and Sol, with openrouter/auto-beta as overflow. min_perspectives " +
           "requests up to 8; above four repeats the same four families. Or supply nonempty specs to name models; each " +
           "answers the shared prompt unless overridden by its spec. Named specs cannot be combined with " +
           "min_perspectives, force_grounding, engine or fusion_preset. Default: raw labeled answers for you to " +
-          "synthesize; synthesize:true merges them. Live X (grok_x_search) is deprecated; use model:'argon', " +
+          "synthesize; synthesize:true merges them. Live X (grok_x_search) is deprecated; use model:'neon', " +
           "grounded:true or force_grounding for live web search. Auto-path web grounding: force_grounding or " +
           "classifier selection for live facts. engine:'fusion' is a slower contested-question escalation, available " +
           "only when specs is omitted. Effort and temperature are not caller knobs. See system/lens fields for " +
@@ -199,7 +199,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         synthesize: z
           .boolean()
           .optional()
-          .describe("true: one merged answer, judged by gemini-4-argon. Default false: raw labeled answers. research_fanout " +
+          .describe("true: one merged answer, judged by gemini-4-neon. Default false: raw labeled answers. research_fanout " +
           "defaults to true."),
         system: z
           .string()
@@ -326,6 +326,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         // Single record path for the whole seat (incl. applyLens failures — B2).
         // degraded is per-seat (ok===false), not run-level (B1).
         let recorded = false;
+        let resolvedLens: string | undefined;
         const record = (ok: boolean, extra: {
           text?: string;
           citations?: string[];
@@ -363,6 +364,7 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
             question_hash: qHash,
             prompt_preview: process.env.METRICS_LOG_PROMPTS === "1" ? spec.prompt : undefined,
             served_tier: extra.served_tier,
+            lens: resolvedLens ?? normalizeLensName(spec.lens, spec.system),
           });
         };
 
@@ -387,7 +389,8 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
         try {
           // Resolve lens → effective system per spec (default second-opinion frame
           // auto-applies when neither lens nor system is given; pass lens:"none" to opt out).
-          const { system, error } = applyLens(spec.lens, spec.system);
+          const { system, error, lens: appliedLens } = applyLens(spec.lens, spec.system);
+          resolvedLens = appliedLens;
           if (error) throw new Error(error);
 
           // grok / sol / opus / sonnet — OpenRouter weights-only (no native web/X plugin).
@@ -397,8 +400,8 @@ export function registerAskPanel(server: any, opts: RegisterOpts) {
               const msg =
                 model === "grok"
                   ? "grok_x_search / grounded Grok is deprecated (Grok now routes via OpenRouter without native X search). " +
-                    "Use model:'argon', grounded:true for live web search, or drop grounded for weights-only Grok."
-                  : `${model} seat has no native web/X grounding — use model:'argon', grounded:true ` +
+                    "Use model:'neon', grounded:true for live web search, or drop grounded for weights-only Grok."
+                  : `${model} seat has no native web/X grounding — use model:'neon', grounded:true ` +
                     "for live web search (grok_x_search is deprecated), or drop grounded for weights-only.";
               record(false, { error: msg, transport: "or", model_slug: defaultSlug, reasoning_effort });
               throw new Error(msg);

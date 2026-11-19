@@ -9,11 +9,13 @@ export type MetricsTool = "oracle" | "panel" | "research_fanout";
 // Gemini rows in this log through 2026-09-20 are Gemini Pro
 // (~google/gemini-pro-latest, or the panel slug "gemini" which resolved to it).
 // Gemini Flash latest, with priority requested on Google calls, starts 2026-09-27.
-// Gemini 4 Argon replaces that Flash pin on 2026-10-13. Do not pool eras.
+// Gemini 4 Argon replaces that Flash pin on 2026-10-13. Gemini 4 Neon replaces
+// Argon on 2026-11-18 (omits service_tier after standard-vs-priority probe).
+// Do not pool eras.
 // Sol fast is on (2026-10-03 reopen): OpenAI Sol slugs send service_tier "fast"
 // from callOpenRouter. Anthropic speed:fast and xAI priority stay scrubbed.
-// Argon and other non-Flash Gemini keep service_tier "priority". Flash and
-// Flash-Lite stopped asking on 2026-11-05 (Tier 1 sheds those pools).
+// Argon and other non-Flash/Neon Gemini keep service_tier "priority". Flash,
+// Hydrogen, Flash-Lite, and Neon omit it.
 // Do not add the scrubbed Anthropic/xAI tiers back.
 // served_tier (2026-10-13) is the OpenRouter response field, not the request.
 // A Sol fast hit is "priority". A shed is "default". Absent means no response
@@ -40,6 +42,8 @@ export interface SeatMetricRecord {
   prompt_preview?: string;
   /** OpenRouter response service_tier. Sol fast hit = "priority". */
   served_tier?: string;
+  /** Canonical analytical lens name ("default", "none", "pre-mortem", etc.). */
+  lens?: string;
 }
 
 function stateDir(): string {
@@ -77,7 +81,7 @@ export function familyFromSlug(modelSlug: string, provider?: string): string {
   const s = modelSlug.toLowerCase();
   if (s.includes("fusion")) return "fusion";
   if (s === "grok" || provider === "grok-direct" || s.includes("grok")) return "grok";
-  if (s.includes("gemini") || s.includes("argon")) return "gemini";
+  if (s.includes("gemini") || s.includes("argon") || s.includes("neon")) return "gemini";
   if (s.includes("gpt") || s.includes("openai")) return "openai";
   if (s.includes("claude") || s.includes("anthropic") || s === "opus" || s === "sonnet") return "claude";
   if (s.includes("auto")) return "auto";
@@ -246,7 +250,7 @@ async function loadMetricsInWindow(opts: {
   return rows;
 }
 
-type GroupKey = "family" | "transport" | "route_mode" | "model_slug";
+type GroupKey = "family" | "transport" | "route_mode" | "model_slug" | "lens";
 
 function groupValue(rec: SeatMetricRecord, by: GroupKey): string {
   switch (by) {
@@ -254,6 +258,7 @@ function groupValue(rec: SeatMetricRecord, by: GroupKey): string {
     case "transport": return rec.transport;
     case "route_mode": return rec.route_mode || "unknown";
     case "model_slug": return rec.model_slug;
+    case "lens": return rec.lens || "unknown";
   }
 }
 
@@ -373,7 +378,7 @@ export function registerGetMetrics(server: any) {
       title: "Get Metrics",
       description:
         "Read on-demand seat-execution metrics: p50/p90/p99 latency, grounding-miss, failover and timeout rates, and " +
-          "error-class breakdown, grouped by family/transport/route_mode/model_slug. Covers oracle/panel and " +
+          "error-class breakdown, grouped by family/transport/route_mode/model_slug/lens. Covers oracle/panel and " +
           "research_fanout seat logs in $STATE_DIRECTORY. Pull-only; no email digest.",
       inputSchema: {
         window_days: z
@@ -388,7 +393,7 @@ export function registerGetMetrics(server: any) {
           .optional()
           .describe("ISO date/time lower bound (overrides window_days)."),
         group_by: z
-          .enum(["family", "transport", "route_mode", "model_slug"])
+          .enum(["family", "transport", "route_mode", "model_slug", "lens"])
           .optional()
           .describe("Grouping dimension (default family)."),
         tool: z

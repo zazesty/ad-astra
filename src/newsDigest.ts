@@ -394,7 +394,7 @@ export async function summarize(userPrompt: string, deps: SummarizeDeps): Promis
   const geminiOpts = {
     system: COMPRESSION_SYSTEM,
     grounded: false,
-    // Null omits thinkingConfig. Google's Argon default is medium.
+    // Null omits thinkingConfig. Google's Neon default applies.
     reasoning_effort: null,
     attempt_timeout_ms: OR_NEWS_DIGEST_ATTEMPT_TIMEOUT_MS,
   };

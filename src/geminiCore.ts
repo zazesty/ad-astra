@@ -30,13 +30,13 @@
 import { GoogleGenAI, ServiceTier, ThinkingLevel } from "@google/genai";
 import { canStartAttempt, remainingMs } from "./timeouts.js";
 
-export const DEFAULT_GEMINI_MODEL = "gemini-4-argon";
-// Stable id. Argon is not a floating alias, so it does not take the "~"
+export const DEFAULT_GEMINI_MODEL = "gemini-4-neon";
+// Stable id. Neon is not a floating alias, so it does not take the "~"
 // that `~google/gemini-flash-latest` and `~google/gemini-pro-latest` required.
-export const DEFAULT_OPENROUTER_GEMINI_MODEL = "google/gemini-4-argon";
+export const DEFAULT_OPENROUTER_GEMINI_MODEL = "google/gemini-4-neon";
 
 /**
- * Gemini 3 Flash, Pro, Gemini 4 Hydrogen, and Gemini 4 Argon accept thinking
+ * Gemini 3 Flash, Pro, Gemini 4 Hydrogen, Argon, and Neon accept thinking
  * levels. Flash-Lite stays on its own minimal default (the classifier).
  * Gemini 2.5 Flash 400s on thinkingLevel.
  */
@@ -44,19 +44,19 @@ export function geminiHonorsThinking(model: string): boolean {
   if (!/gemini/i.test(model)) return false;
   if (/lite/i.test(model)) return false;
   if (/2\.5/.test(model)) return false;
-  return /flash/i.test(model) || /hydrogen/i.test(model) || /argon/i.test(model) || /pro-latest/i.test(model) || /-pro\b/i.test(model);
+  return /flash/i.test(model) || /hydrogen/i.test(model) || /argon/i.test(model) || /neon/i.test(model) || /pro-latest/i.test(model) || /-pro\b/i.test(model);
 }
 
 /**
  * Effort actually attached to a request.
- * Argon, and the bare panel tokens "argon" and "gemini" (that seat), send medium when the
- * caller omits it. High on Argon ran a 48.5s median on 2026-10-13, past the
- * 40s chat abort. Flash and Pro omit the field (2026-11-05): Google's default
+ * Neon, Argon, and the bare panel tokens "neon", "argon", and "gemini" (that seat),
+ * send medium when the caller omits it. High on Argon ran a 48.5s median on 2026-10-13,
+ * past the 40s chat abort. Flash and Pro omit the field (2026-11-05): Google's default
  * for current Flash is medium, and the old force-high line is gone. Sonnet sends
  * medium: Sonnet 5.5's own default is high, and medium is our seat default.
  * Sonnet 5.5 at medium is faster, more capable, and cheaper per task than
  * Sonnet 5 at high. An explicit request always wins. Pass null to omit even on
- * Argon, so Google's own default applies. Every other family omits the field.
+ * Neon/Argon, so Google's own default applies. Every other family omits the field.
  */
 export function wireReasoningEffort(
   modelSlug: string | undefined,
@@ -65,7 +65,7 @@ export function wireReasoningEffort(
   if (requested === null) return undefined;
   if (requested) return requested;
   const s = modelSlug ?? "";
-  if (/argon/i.test(s) || s === "gemini") return "medium";
+  if (/neon/i.test(s) || /argon/i.test(s) || s === "gemini") return "medium";
   if (/sonnet|claude/i.test(s)) return "medium";
   if (/grok/i.test(s) || s === "grok") return "medium";
   return undefined;
@@ -73,13 +73,14 @@ export function wireReasoningEffort(
 
 /**
  * Google priority is a Tier 2/3 reservation. This project is Tier 1, and Flash,
- * Hydrogen, and Flash-Lite are shed to standard (2026-11-05). Stop asking on
- * any slug whose name contains "flash" or "hydrogen" (including floating
- * aliases). Argon and other Gemini models still ask. Sol fast is separate.
+ * Hydrogen, and Flash-Lite are shed to standard (2026-11-05). Neon also omits
+ * priority (probe 2026-11-18): AI Studio BYOK sheds to default, while Vertex
+ * ("Google") serves priority at ~1.8x credit cost with no p50/p90 latency win.
+ * Argon and other non-Flash Gemini still ask. Sol fast is separate.
  */
 export function geminiRequestsPriority(model: string): boolean {
   if (!/gemini/i.test(model)) return false;
-  if (/flash/i.test(model) || /hydrogen/i.test(model)) return false;
+  if (/flash/i.test(model) || /hydrogen/i.test(model) || /neon/i.test(model)) return false;
   return true;
 }
 
@@ -309,16 +310,17 @@ export interface CallOpenRouterOpts {
  *     gemini slug. `grounded` on a non-gemini slug is a no-op + a loud warning —
  *     OR serves Grok as plain chat, so a grounded grok request would SILENTLY
  *     lose grounding; we surface it instead.
- *   - Reasoning effort: Argon gets medium when the field is omitted (high
+ *   - Reasoning effort: Neon and Argon get medium when omitted (high
  *     misses the chat abort). Flash and Pro omit it (Google's Flash default
  *     is medium; the force-high line was removed 2026-11-05). Null omits the
- *     field even on Argon. Sonnet is sent medium. GPT, Grok, auto, and fusion
+ *     field even on Neon/Argon. Sonnet is sent medium. GPT, Grok, auto, and fusion
  *     omit the field (Sol's own default is medium; Grok's own default is high).
  *     Gemini 2.5 Flash still 400s on thinkingLevel, so it is excluded.
- *   - Service tier: Argon and other non-Flash Gemini send "priority". Flash
- *     and Flash-Lite omit it (Tier 1 sheds those pools). Sol-family slugs
- *     send "fast" (same OpenRouter preference: priority endpoints first,
- *     then default, billed as served). Anthropic speed and xAI priority
+ *   - Service tier: Neon, Flash, Hydrogen, and Flash-Lite omit it (Tier 1
+ *     BYOK sheds to default; Vertex serves Neon priority at 1.8x cost with
+ *     no latency win). Argon and other non-Flash Gemini still ask "priority".
+ *     Sol-family slugs send "fast" (same OpenRouter preference: priority endpoints
+ *     first, then default, billed as served). Anthropic speed and xAI priority
  *     stay off. Do not pin provider.only — that removes the fallback.
  */
 export async function callOpenRouter(
@@ -348,9 +350,9 @@ export async function callOpenRouter(
 
   const body: Record<string, unknown> = { model, messages };
   if (effort && supportsEffort) body.reasoning = { effort };
-  // Preference only. Argon still asks for Google priority. Flash and Flash-Lite
-  // omit the field. Sol family sends OpenAI fast (falls back to default and is
-  // billed as served). No provider.only pin.
+  // Preference only. Neon, Flash, Hydrogen, and Flash-Lite omit the field.
+  // Argon still asks for Google priority. Sol family sends OpenAI fast (falls
+  // back to default and is billed as served). No provider.only pin.
   if (isGemini && geminiRequestsPriority(model)) body.service_tier = "priority";
   else if (isOpenAiSolSlug(model)) body.service_tier = "fast";
   const serviceTier = typeof body.service_tier === "string" ? body.service_tier : "default";
@@ -446,7 +448,7 @@ export async function callOpenRouter(
  * Thin back-compat alias over callOpenRouter — preserves the exact signature
  * ask_panel and newsDigest already call. Resolves the slug from opts.model the
  * way the old function did (bare slug → google/ namespace; default = Gemini
- * 4 Argon), then delegates. Do NOT remove: it keeps panel.ts /
+ * 4 Neon), then delegates. Do NOT remove: it keeps panel.ts /
  * newsDigest.ts untouched through the ask_oracle migration.
  */
 export async function callGeminiViaOpenRouter(
