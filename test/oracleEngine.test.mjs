@@ -197,20 +197,22 @@ console.log("\nUnit: buildSlots — panel sizing & overrides");
   ok(s.every((x) => x.reasoning_effort === "low"), "explicit reasoning_effort overrides default");
 }
 {
-  // Classifier high effort does NOT touch seat effort — seats stay at default medium
+  // Classifier high effort does NOT touch seat effort — Neon stays low, others medium
   const s = buildSlots(C({ reasoning_effort: "high", suggested_panel_n: 3 }), {});
-  ok(s.every((x) => x.reasoning_effort === "medium"), "classifier high does not alter seat effort (stays medium)");
+  ok(s.every((x) => x.reasoning_effort === (/neon|argon/i.test(x.model_slug) ? "low" : "medium")), "classifier high does not alter standing defaults (neon low, others medium)");
   const sWithGrok = buildSlots(C({ reasoning_effort: "high", suggested_panel_n: 2 }), { caller_family: "claude" });
   const grok = sWithGrok.find((x) => x.model_slug === "x-ai/grok-4.7");
   ok(grok && grok.reasoning_effort === "medium", "grok stays at default medium under classifier high");
+  const neon = sWithGrok.find((x) => /neon/i.test(x.model_slug));
+  ok(neon && neon.reasoning_effort === "low", "neon stays at default low under classifier high");
   const sExplicit = buildSlots(C(), { caller_family: "claude", reasoning_effort: "high" });
   const grokExplicit = sExplicit.find((x) => x.model_slug === "x-ai/grok-4.7");
   ok(grokExplicit && grokExplicit.reasoning_effort === "high", "explicit reasoning_effort sets Grok to high");
 }
 {
-  // Classifier low effort does NOT touch seat effort — seats stay at default medium
+  // Classifier low effort does NOT touch seat effort — Neon stays low, others medium
   const s = buildSlots(C({ reasoning_effort: "low", suggested_panel_n: 3 }), {});
-  ok(s.every((x) => x.reasoning_effort === "medium"), "classifier low does not alter seat effort (stays medium)");
+  ok(s.every((x) => x.reasoning_effort === (/neon|argon/i.test(x.model_slug) ? "low" : "medium")), "classifier low does not alter standing defaults (neon low, others medium)");
 }
 {
   const s = buildSlots(C(), { force_x: true, force_grounding: true });
@@ -377,6 +379,7 @@ console.log("\nUnit: assemble — hybrid fusion + capability synth (offline, stu
     const judgeInput = (judgeBody?.messages ?? []).map((m) => m.content).join("\n");
     ok(judgeInput.includes("fusion answer") && judgeInput.includes("grounded answer"), "both seats fed to judge (capability seat not dropped)");
     ok(judgeInput.includes("https://src.example/a"), "capability citations preserved into judge input");
+    ok(judgeBody?.model === "google/gemini-4-neon" && judgeBody?.reasoning?.effort === "low" && judgeBody?.service_tier === undefined, "synthesize judge sends neon low without priority");
     ok(route.used_grounding === true, "realized used_grounding true when grounded seat ok");
   } finally {
     globalThis.fetch = realFetch;

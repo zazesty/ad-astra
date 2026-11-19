@@ -41,12 +41,12 @@ console.log("Unit: metrics");
 check("hashQuestion stable", hashQuestion("hello").length === 16);
 check("omitted flash logs unspecified", loggedReasoningEffort("~google/gemini-flash-latest", undefined) === "unspecified");
 check("null effort logs unspecified", loggedReasoningEffort("google/gemini-4-argon", null) === "unspecified");
-check("omitted argon logs medium", loggedReasoningEffort("google/gemini-4-argon", undefined) === "medium");
-check("omitted neon logs medium", loggedReasoningEffort("google/gemini-4-neon", undefined) === "medium");
+check("omitted argon logs low", loggedReasoningEffort("google/gemini-4-argon", undefined) === "low");
+check("omitted neon logs low", loggedReasoningEffort("google/gemini-4-neon", undefined) === "low");
 check("null neon effort logs unspecified", loggedReasoningEffort("google/gemini-4-neon", null) === "unspecified");
-check("omitted neon token logs medium", loggedReasoningEffort("neon", undefined) === "medium");
-check("omitted bare gemini logs medium", loggedReasoningEffort("gemini", undefined) === "medium");
-check("omitted argon token logs medium", loggedReasoningEffort("argon", undefined) === "medium");
+check("omitted neon token logs low", loggedReasoningEffort("neon", undefined) === "low");
+check("omitted bare gemini logs low", loggedReasoningEffort("gemini", undefined) === "low");
+check("omitted argon token logs low", loggedReasoningEffort("argon", undefined) === "low");
 check("omitted sonnet logs medium", loggedReasoningEffort("~anthropic/claude-sonnet-latest", undefined) === "medium");
 check("explicit sonnet high stays high", loggedReasoningEffort("~anthropic/claude-sonnet-latest", "high") === "high");
 check("omitted sol logs medium", loggedReasoningEffort("~openai/gpt-sol-latest", undefined) === "medium");
@@ -213,7 +213,7 @@ try {
       check("panel logs pre-mortem lens", lensStats.by_group["pre-mortem"]?.seat_count === 1);
       check("panel logs none lens for stale argon", lensStats.by_group["none"]?.seat_count === 1);
       check("neon & stale argon both send google/gemini-4-neon", bodies.length === 2 && bodies.every((b) => b.model === "google/gemini-4-neon"));
-      check("neon & stale argon both send medium effort without priority", bodies.every((b) => b.reasoning?.effort === "medium" && b.service_tier === undefined));
+      check("neon & stale argon both send low effort without priority", bodies.every((b) => b.reasoning?.effort === "low" && b.service_tier === undefined));
     } finally {
       await cli.close();
       await srv.close();

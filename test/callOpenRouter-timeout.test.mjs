@@ -148,12 +148,12 @@ async function run() {
     check("flash-lite does not ask priority", lite.service_tier === undefined);
     const argon = await tierFor("google/gemini-4-argon");
     check("argon does not ask priority (deprecated)", argon.service_tier === undefined && argon.model === "google/gemini-4-argon");
-    check("omitted argon effort is medium", argon.reasoning?.effort === "medium");
+    check("omitted argon effort is low", argon.reasoning?.effort === "low");
     const pro = await tierFor("~google/gemini-pro-latest");
     check("pro does not ask priority (deprecated)", pro.service_tier === undefined);
     const neon = await tierFor("google/gemini-4-neon");
     check("neon does not ask priority", neon.service_tier === undefined && neon.model === "google/gemini-4-neon");
-    check("omitted neon effort is medium", neon.reasoning?.effort === "medium");
+    check("omitted neon effort is low", neon.reasoning?.effort === "low");
     const neonNull = await tierFor("google/gemini-4-neon", null);
     check("null neon effort is unset", neonNull.reasoning === undefined && neonNull.service_tier === undefined);
     const bareGemini = await tierFor("gemini-2.5-flash");

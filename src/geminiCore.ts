@@ -50,13 +50,14 @@ export function geminiHonorsThinking(model: string): boolean {
 /**
  * Effort actually attached to a request.
  * Neon, Argon, and the bare panel tokens "neon", "argon", and "gemini" (that seat),
- * send medium when the caller omits it. High on Argon ran a 48.5s median on 2026-10-13,
- * past the 40s chat abort. Flash and Pro omit the field (2026-11-05): Google's default
- * for current Flash is medium, and the old force-high line is gone. Sonnet sends
- * medium: Sonnet 5.5's own default is high, and medium is our seat default.
- * Sonnet 5.5 at medium is faster, more capable, and cheaper per task than
- * Sonnet 5 at high. An explicit request always wins. Pass null to omit even on
- * Neon/Argon, so Google's own default applies. Every other family omits the field.
+ * send low when the caller omits it (2026-11-19 bakeoff: medium hit 39.5s p90
+ * against the 40s chat abort; low clears at 21.8s p50 / 30.7s p90). Flash and
+ * Pro omit the field (2026-11-05): Google's default for current Flash is medium,
+ * and the old force-high line is gone. Sonnet sends medium: Sonnet 5.5's own
+ * default is high, and medium is our seat default. Sonnet 5.5 at medium is
+ * faster, more capable, and cheaper per task than Sonnet 5 at high. An explicit
+ * request always wins. Pass null to omit even on Neon/Argon, so Google's own
+ * default applies. Every other family omits the field.
  */
 export function wireReasoningEffort(
   modelSlug: string | undefined,
@@ -65,7 +66,7 @@ export function wireReasoningEffort(
   if (requested === null) return undefined;
   if (requested) return requested;
   const s = modelSlug ?? "";
-  if (/neon/i.test(s) || /argon/i.test(s) || s === "gemini") return "medium";
+  if (/neon/i.test(s) || /argon/i.test(s) || s === "gemini") return "low";
   if (/sonnet|claude/i.test(s)) return "medium";
   if (/grok/i.test(s) || s === "grok") return "medium";
   return undefined;
@@ -308,12 +309,13 @@ export interface CallOpenRouterOpts {
  *     gemini slug. `grounded` on a non-gemini slug is a no-op + a loud warning —
  *     OR serves Grok as plain chat, so a grounded grok request would SILENTLY
  *     lose grounding; we surface it instead.
- *   - Reasoning effort: Neon and Argon get medium when omitted (high
- *     misses the chat abort). Flash and Pro omit it (Google's Flash default
- *     is medium; the force-high line was removed 2026-11-05). Null omits the
- *     field even on Neon/Argon. Sonnet is sent medium. GPT, Grok, auto, and fusion
- *     omit the field (Sol's own default is medium; Grok's own default is high).
- *     Gemini 2.5 Flash still 400s on thinkingLevel, so it is excluded.
+ *   - Reasoning effort: Neon and Argon get low when omitted (2026-11-19;
+ *     medium ran 39.5s p90 near the 40s chat abort, low clears 30.7s p90). Flash
+ *     and Pro omit it (Google's Flash default is medium; the force-high line was
+ *     removed 2026-11-05). Null omits the field even on Neon/Argon. Sonnet is
+ *     sent medium. GPT, Grok, auto, and fusion omit the field (Sol's own default
+ *     is medium; Grok's own default is high). Gemini 2.5 Flash still 400s on
+ *     thinkingLevel, so it is excluded.
  *   - Service tier: deprecated for all Gemini models (2026-11-18; Tier 1 AI
  *     Studio sheds to default, while Vertex fallback bills ~1.8x with no latency
  *     win). Sol fast is also OFF (2026-11-18 bakeoff: 6.2-sol medium standard

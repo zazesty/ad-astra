@@ -59,11 +59,10 @@ function metricsPathForDate(d: Date): string {
 
 /**
  * Effort written to the seat log. An explicit level is that level. When the
- * caller omits it, Argon (and the bare "gemini" seat token) is medium, Flash and
+ * caller omits it, Neon/Argon (and the bare "gemini" seat token) is low, Flash and
  * Pro are unspecified (the field is omitted; Google's Flash default is medium),
- * and Sonnet is medium. Grok is high and GPT is medium because those are the
- * provider defaults we leave in place by not attaching the field. Null on Argon
- * or Flash logs unspecified.
+ * and Sonnet is medium. Grok is medium and GPT is medium because those are the
+ * defaults we leave in place. Null on Neon/Argon or Flash logs unspecified.
  */
 export function loggedReasoningEffort(modelSlug: string | undefined, requested?: string | null): string {
   const wired = wireReasoningEffort(modelSlug, requested);

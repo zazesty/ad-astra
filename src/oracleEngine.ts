@@ -334,11 +334,15 @@ function reasoningSeat(slug: string, idx: number, lens: string, effort: Effort, 
 export function buildSlots(c: Classification, ov: OracleOverrides = {}): Seat[] {
   const lens = ov.lens ?? c.suggested_lens;
   // Classifier evaluates difficulty for route transparency and sizing, but NEVER
-  // touches model effort. Models stay at their standing defaults (medium) unless
-  // the caller explicitly requested reasoning_effort (or max_effort).
+  // touches model effort. Models stay at their standing defaults (Neon low as
+  // of 2026-11-19; other seats medium) unless the caller explicitly requested
+  // reasoning_effort (or max_effort).
   const explicitEffort = ov.reasoning_effort;
-  const baseEffort: Effort = explicitEffort ?? capEffort("medium", ov.max_effort);
-  const effortFor = (_slug: string): Effort => baseEffort;
+  const effortFor = (slug: string): Effort => {
+    if (explicitEffort) return explicitEffort;
+    const standingDefault: Effort = /neon|argon/i.test(slug) ? "low" : "medium";
+    return capEffort(standingDefault, ov.max_effort);
+  };
   const seats: Seat[] = [];
 
   // capability seats — native tools, never routed through `auto`.
@@ -817,13 +821,10 @@ async function synthesize(
     "You are a synthesizer. Merge the labeled model answers below into ONE coherent answer. " +
     "State points of agreement plainly; surface genuine disagreements explicitly rather than averaging them away; " +
     "preserve citations. Do not mention that you are merging multiple sources.";
-  // Judge is PINNED to gemini-4-neon, not openrouter/auto-beta: synthesis is a
-  // fixed, well-defined task that wants a strong, predictable reasoner — auto
-  // optimizes per-prompt and could route a "merge these" call somewhere weak/
-  // unexpected. Medium, same cap as the Neon seat. (NB: deliberately NOT
-  // openrouter/fusion — Fusion runs its OWN panel, which would re-answer +
-  // double-spend over seats we already ran; Fusion is reserved as a separate
-  // optional hard-route ENGINE, see spec §6a.)
+  // Judge is PINNED to gemini-4-neon at low effort (2026-11-19): synthesis is a
+  // fixed, well-defined merge task that runs sequentially inside the remaining
+  // outer budget (50s chat / 110s CLI); medium ran 39.5s p90 and starved the
+  // chat window. (NB: deliberately NOT openrouter/auto-beta or openrouter/fusion.)
   // Judge runs through the same OR→direct failover as reasoning seats — synthesize
   // is the headless path (synthesize:true), so it must survive an OR outage rather
   // than hard-error. GEMINI_PRO_SLUG is gemini → fails over to direct-gemini.
@@ -838,7 +839,7 @@ async function synthesize(
   }
   const r = await orReasoningWithFailover(deps, GEMINI_PRO_SLUG, blocks, {
     system,
-    reasoning_effort: capEffort(route.reasoning_effort, "medium"),
+    reasoning_effort: "low",
   }, { startedAt: t0, budgetMs });
   return r.text;
 }
@@ -855,7 +856,7 @@ export async function judgeLabeledAnswers(
       provider: "openrouter",
       model_slug: GEMINI_PRO_SLUG,
       lens: "default",
-      reasoning_effort: "medium",
+      reasoning_effort: "low",
     },
     status: "ok",
     text: p.text,
@@ -865,7 +866,7 @@ export async function judgeLabeledAnswers(
     mode: "panel",
     models: [],
     lens: "default",
-    reasoning_effort: "medium",
+    reasoning_effort: "low",
     used_x_search: false,
     used_grounding: false,
     panel_n: parts.length,
