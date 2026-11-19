@@ -12,8 +12,10 @@ export type MetricsTool = "oracle" | "panel" | "research_fanout";
 // Gemini 4 Argon replaces that Flash pin on 2026-10-13. Gemini 4 Neon replaces
 // Argon on 2026-11-18 (omits service_tier after standard-vs-priority probe).
 // Do not pool eras.
-// Sol fast is on (2026-10-03 reopen): OpenAI Sol slugs send service_tier "fast"
-// from callOpenRouter. Anthropic speed:fast and xAI priority stay scrubbed.
+// Sol fast is off (2026-11-18 bakeoff: 6.2-sol medium standard clears <10s p90
+// at 1x cost; fast is tiebreaker-only under time limits when dropping effort is
+// inadequate for quality or speed). Anthropic speed:fast and xAI priority stay
+// scrubbed.
 // Google priority is deprecated for all Gemini models (2026-11-18: Tier 1 AI
 // Studio sheds to default while Vertex fallback bills ~1.8x with no latency win).
 // Do not add the scrubbed Anthropic/xAI tiers back.

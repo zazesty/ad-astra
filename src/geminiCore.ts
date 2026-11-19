@@ -82,9 +82,11 @@ export function geminiRequestsPriority(_model: string): boolean {
 }
 
 /**
- * OpenAI Sol family only (floating alias and dated Sol ids, including -pro).
- * Luna, auto, fusion, Sonnet, and Grok do not match. Used to attach
- * OpenRouter service_tier "fast" — a preference, not a different model id.
+ * OpenAI Sol family detector (floating alias and dated Sol ids, including -pro).
+ * Kept exported for metrics/test classification. Sol `service_tier: "fast"` is
+ * OFF as of 2026-11-18 (6.2-sol medium standard clears <10s p90 at standard cost;
+ * fast is reserved only as a tiebreaker under time limits when dropping effort
+ * is inadequate for quality or speed).
  */
 export function isOpenAiSolSlug(model: string): boolean {
   const s = model.toLowerCase();
@@ -314,9 +316,11 @@ export interface CallOpenRouterOpts {
  *     Gemini 2.5 Flash still 400s on thinkingLevel, so it is excluded.
  *   - Service tier: deprecated for all Gemini models (2026-11-18; Tier 1 AI
  *     Studio sheds to default, while Vertex fallback bills ~1.8x with no latency
- *     win). Sol-family slugs send "fast" (OpenRouter preference: priority endpoints
- *     first, then default, billed as served). Anthropic speed and xAI priority
- *     stay off. Do not pin provider.only — that removes the fallback.
+ *     win). Sol fast is also OFF (2026-11-18 bakeoff: 6.2-sol medium standard
+ *     clears <10s p90 at half the token rate; only use fast as a tiebreaker to
+ *     squeeze under a time limit when dropping effort is inadequate for quality
+ *     or speed). Anthropic speed and xAI priority stay off. Do not pin
+ *     provider.only — that removes the fallback.
  */
 export async function callOpenRouter(
   apiKey: string | undefined,
@@ -345,10 +349,9 @@ export async function callOpenRouter(
 
   const body: Record<string, unknown> = { model, messages };
   if (effort && supportsEffort) body.reasoning = { effort };
-  // Preference only. Google priority is deprecated across all Gemini models.
-  // Sol family sends OpenAI fast (falls back to default and is billed as served).
-  // No provider.only pin.
-  if (isOpenAiSolSlug(model)) body.service_tier = "fast";
+  // Service tier omitted for all models (Google priority deprecated; Sol fast
+  // disabled 2026-11-18 — fast is tiebreaker-only under time limits when
+  // dropping effort is inadequate for quality or speed). No provider.only pin.
   const serviceTier = typeof body.service_tier === "string" ? body.service_tier : "default";
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
   if (opts.response_format) body.response_format = opts.response_format;

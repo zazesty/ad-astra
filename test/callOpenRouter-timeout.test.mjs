@@ -102,7 +102,7 @@ async function run() {
     check("503 then ok: 2 attempts", attempts === 2);
   }
 
-  // 4. Service tier: Sol fast, Argon priority, Flash and Flash-Lite unset.
+  // 4. Service tier: unset for Sol (disabled 2026-11-18), Neon, Argon, Flash, Flash-Lite.
   {
     async function tierFor(slug, reasoning_effort) {
       let body;
@@ -120,6 +120,7 @@ async function run() {
     }
     const solSlugs = [
       "~openai/gpt-sol-latest",
+      "openai/gpt-6.2-sol",
       "openai/gpt-6.1-sol",
       "openai/gpt-6-sol",
       "openai/gpt-6.1-sol-pro",
@@ -127,7 +128,7 @@ async function run() {
     ];
     for (const slug of solSlugs) {
       const body = await tierFor(slug);
-      check(`sol tier fast: ${slug}`, body.service_tier === "fast" && body.provider === undefined);
+      check(`sol tier standard/unset: ${slug}`, body.service_tier === undefined && body.provider === undefined);
       check(`sol detector: ${slug}`, isOpenAiSolSlug(slug));
     }
     globalThis.fetch = async () => new Response(JSON.stringify({
