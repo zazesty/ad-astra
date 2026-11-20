@@ -4,17 +4,18 @@ A small personal MCP server (Node/TypeScript, Express + `@modelcontextprotocol/s
 running on `zaz-astra`, exposed over Tailscale Funnel. Stateless: a fresh server +
 transport per request.
 
-## Tools
+## Tools (11)
 
 - **`ask_panel`** — ask one or more models concurrently and get raw, labeled
   answers back to synthesize yourself (or omit `specs` for classifier auto-routing).
-  Per-spec backend (`grok` | `argon` | `sol` | `sonnet`), web grounding (`argon`),
+  Per-spec backend (`grok` | `neon` | `sol` | `sonnet`; stale `argon`/`gemini`/`openai`/`opus` aliases remap safely), web grounding (`neon`),
   lens, `model_slug`. One spec failing doesn't fail the others.
 - **`grok_x_search`** — *(soft-deprecated 2026-11-15)* previously citations-first live X
   search (xAI `/responses` + `x_search`); standalone tool culled in 2026-08 and
   Grok live-X grounding soft-deprecated in 2026-11-15 when Grok switched to OpenRouter
-  (`x-ai/grok-4.7`). Use `ask_panel` with `model: "argon", grounded: true` or
+  (`x-ai/grok-4.7`). Use `ask_panel` with `model: "neon", grounded: true` or
   `research_fanout` for live web search.
+- **`research_fanout`** — multi-leg evidence/web fanout (`google/gemini-4-hydrogen` at medium effort).
 - **`get_odds`** — live prediction-market odds. Defaults: Polymarket + Kalshi (real money). Optional sources: Manifold (play-money mana), Metaculus (community forecast, forecaster count), and PredictIt (real money; no published volume).
 - **`get_news_digest`** — on-demand, *compressed* read of a curated RSS feed list
   (AI/frontier, macro/heterodox, light industry). Fetches the last N days, dedupes,
@@ -22,6 +23,10 @@ transport per request.
   and returns it inline. **Never web-searches** — the curated `feeds.json` is the
   whole source list, by design. Quiet-when-quiet; on-demand only (no schedule). See
   [News digest](#news-digest-get_news_digest) below.
+- **`get_metrics`** — latency/spend/telemetry summary over logged tool calls.
+- **`memory_search` / `memory_retrieve` / `memory_upsert` / `memory_list`** — shared `/root/memory` KB tools (`memory://index` resource).
+- **`standing_todo_add`** — add-only signed park onto the open work board.
+- **`personal_memory_sync`** — tier-1 personal memory sync helper.
 
 Plus the `lenses://frames` resource (analytical frames, live-read from `lenses.md`).
 
@@ -32,31 +37,29 @@ All config is via environment variables in `/etc/grok-mcp.env` (template:
 
 | Var | Purpose |
 | --- | --- |
-| `OPENROUTER_API_KEY` | Primary inference gateway (Grok `x-ai/grok-4.7`, Sol, Sonnet, Argon via OR). |
+| `OPENROUTER_API_KEY` | Primary inference gateway (Grok `x-ai/grok-4.7`, Sol, Sonnet, Neon/Hydrogen via OR). |
 | `GEMINI_API_KEY` | Gemini on the **direct** transport (`@google/genai` SDK) & OR→direct failover. |
-| `GEMINI_TRANSPORT` | `direct` (default) or `openrouter` — see below. |
+| `GEMINI_TRANSPORT` | `openrouter` (default) or `direct` — see below. |
 | `MCP_PATH` | Mount path(s). Treat as a credential. |
 | `RESEND_API_KEY`, `NOTIFY_EMAIL_TO` | Alert email (scripts) **and** `get_news_digest` delivery. `NOTIFY_EMAIL_FROM` optional. |
 
-## Gemini transport: direct vs OpenRouter (BYOK)
+## Gemini transport: OpenRouter (BYOK, default) vs direct
 
-`ask_panel`'s **gemini** specs can reach Google two ways, chosen by
+`ask_panel`'s **neon** specs can reach Google two ways, chosen by
 `GEMINI_TRANSPORT`. **External behavior of `ask_panel` is identical either way** —
 same signature, same per-spec controls, same output shape. Only the transport
 for Gemini changes. Grok (`x-ai/grok-4.7`) always routes via OpenRouter.
 
-- **`direct`** (default) — first-party `@google/genai` SDK, AI Studio key auth.
+- **`direct`** — first-party `@google/genai` SDK, AI Studio key auth.
   Thinking via `thinkingConfig`, grounding via the native `googleSearch` tool.
-- **`openrouter`** — OpenRouter's OpenAI-compatible `/chat/completions`, **BYOK**:
+- **`openrouter`** (default) — OpenRouter's OpenAI-compatible `/chat/completions`, **BYOK**:
   add the same Google AI Studio key as a provider key in the OpenRouter dashboard
   (Settings → Integrations) so `google/*` calls route through it and bill your AI
   Studio credits (a small BYOK surcharge may apply). When credits eventually run
   out, switching to OpenRouter's own billing is a dashboard change, no code edit.
-  - Model slug: `google/gemini-pro-latest` (OpenRouter's floating alias, mirrors
-    the direct path's `gemini-pro-latest`). The resolved model is logged to
-    journald on both paths so the `gemini-model-check` guard stays meaningful.
+  - Model slugs: `google/gemini-4-neon` (panel seat & synthesize judge at low effort, no `service_tier`), `google/gemini-4-hydrogen` (`research_fanout` grounded legs at medium effort), and `google/gemini-3.5-flash-lite` (classifier). *(Historical 2026-06 validation originally ran against `gemini-pro-latest`.)*
   - Reasoning: mapped to OpenRouter's unified `reasoning: { effort }`
-    (`low|medium|high`, default `high`, attached only for `-pro` models).
+    (`low|medium|high`, seat-configured).
   - **Grounding pins `engine:"native"`** — i.e. Gemini's own Google Search
     grounding passed through the gateway (same index/sources as direct), returned
     as `url_citation` annotations. It deliberately **never** uses OpenRouter's Exa
