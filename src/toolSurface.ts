@@ -18,6 +18,7 @@ export const MCP_TOOLS = [
   "research_fanout",
   "standing_todo_add",
   "personal_memory_sync",
+  "get_operator_context",
 ] as const;
 
 export type McpToolName = (typeof MCP_TOOLS)[number];
@@ -46,4 +47,5 @@ export const TOOL_ANNOTATIONS: Record<McpToolName, ExpectedToolAnnotations> = {
   research_fanout: { readOnlyHint: true, destructiveHint: false },
   standing_todo_add: { readOnlyHint: false, destructiveHint: false },
   personal_memory_sync: { readOnlyHint: false, destructiveHint: true },
+  get_operator_context: { readOnlyHint: true, destructiveHint: false },
 };

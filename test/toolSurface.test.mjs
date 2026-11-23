@@ -83,6 +83,7 @@ try {
     "ask_panel",
     "get_metrics",
     "get_odds",
+    "get_operator_context",
     "memory_list",
     "memory_retrieve",
     "memory_search",

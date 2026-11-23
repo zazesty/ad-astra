@@ -256,6 +256,19 @@ if (touched(["newsDigest.ts"])) {
   probes.push("get_news_digest");
 }
 
+if (touched(["operatorContext.ts"])) {
+  console.log("verify-live: probing get_operator_context...");
+  const manifest = await callTool("get_operator_context", { section: "manifest" }, 15_000);
+  if (!manifest?.files?.operator?.available || !manifest?.files?.agents?.available) {
+    fail(`get_operator_context manifest probe failed: ${JSON.stringify(manifest)}`);
+  }
+  const todos = await callTool("get_operator_context", { section: "todos" }, 15_000);
+  if (typeof todos?.open_count !== "number" || !Array.isArray(todos?.items)) {
+    fail(`get_operator_context todos probe failed: ${JSON.stringify(todos)}`);
+  }
+  probes.push("get_operator_context");
+}
+
 // 7. Write verification stamp for pre-push hook.
 const stampPath = join(ROOT, ".git", "verified-head");
 const stamp = {
